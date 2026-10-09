@@ -21,3 +21,4 @@ Widget and demo web client:
 cd widget && npm install
 cd client/web && npm install
 ```
+# FitPilot
