@@ -15,6 +15,21 @@ uv run ruff check .
 uv run pytest
 ```
 
+Run the MCP server (Streamable HTTP at `http://localhost:8000/mcp`):
+
+```bash
+uv run uvicorn server.app:app --port 8000
+```
+
+Connect with MCP Inspector:
+
+```bash
+npx @modelcontextprotocol/inspector
+```
+
+In the Inspector UI choose transport **Streamable HTTP**, URL `http://localhost:8000/mcp`,
+then Connect → Tools → `ping`. With `AUTH_MODE=api_key`, add an `x-api-key` header.
+
 Widget and demo web client:
 
 ```bash
