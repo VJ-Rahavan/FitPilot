@@ -6,9 +6,12 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
+    "asyncpg>=0.32.0",
     "fastapi>=0.143.0",
     "mcp>=2.3,<3",
     "pydantic-settings>=2.15.0",
+    "rapidfuzz>=3.14.6",
+    "sqlalchemy[asyncio]>=2",
     "uvicorn[standard]>=0.54.0",
 ]
 
@@ -33,6 +36,3 @@ select = ["E", "F", "I", "UP", "B"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
-[tool.ruff.lint.per-file-ignores]
-# Imported unchanged from FitGen; imports are rewritten in Phase 3. Remove then.
-"server/catalog/*" = ["I001"]
