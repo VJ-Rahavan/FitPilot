@@ -36,6 +36,3 @@ select = ["E", "F", "I", "UP", "B"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
-[tool.ruff.lint.per-file-ignores]
-# Imported unchanged from FitGen; imports are rewritten in Phase 3. Remove then.
-"server/catalog/*" = ["I001"]

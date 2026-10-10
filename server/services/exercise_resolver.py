@@ -42,6 +42,8 @@ class ExerciseEntry:
     id: int
     name: str
     aliases: tuple[str, ...] = ()
+    equipment: str = "barbell"
+    form_cues: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,9 @@ class ExerciseResolver:
         self._key_list = list(self._keys)
         # Same keys without spaces, so "benchpress" finds "bench press".
         self._compact = {k.replace(" ", ""): i for k, i in self._keys.items()}
+
+    def get(self, exercise_id: int) -> ExerciseEntry:
+        return self._by_id[exercise_id]
 
     def resolve(self, query: str) -> Resolution:
         q = normalize(query)

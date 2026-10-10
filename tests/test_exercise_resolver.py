@@ -1,7 +1,9 @@
 import pytest
 
 from server.db.seed_data import EXERCISES
+from server.services.context import UserFacingError
 from server.services.exercise_resolver import ExerciseEntry, ExerciseResolver, normalize
+from server.services.workouts import resolve_exercise
 
 
 @pytest.fixture(scope="module")
@@ -87,3 +89,14 @@ def test_seed_aliases_are_unique_after_normalizing():
         for key in {normalize(e.name), *(normalize(a) for a in e.aliases)}:
             assert key not in seen, f"{key!r} used by {seen[key]} and {e.name}"
             seen[key] = e.name
+
+
+def test_voice_errors_for_unresolved_names(resolver):
+    assert resolve_exercise(resolver, "squatz").name == "Back Squat"
+    with pytest.raises(UserFacingError) as ambiguous:
+        resolve_exercise(resolver, "press")
+    assert ambiguous.value.message.startswith("Did you mean ")
+    assert " or " in ambiguous.value.message
+    with pytest.raises(UserFacingError) as unknown:
+        resolve_exercise(resolver, "zumba")
+    assert unknown.value.message.startswith("I couldn't find an exercise called zumba.")

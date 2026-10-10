@@ -1,8 +1,7 @@
 """The UI component catalog.
 
-This is the contract between the LLM and the frontend: the LLM may only emit these
-components (validated here), and the frontend has one renderer per `type`. The LLM never
-produces HTML/JS, so generated UI is always safe and on-brand.
+The contract between the MCP server and the widget: tools return only these components
+(validated before sending), and the widget has one renderer per `type`.
 """
 
 from typing import Annotated, Any, Literal
@@ -25,8 +24,8 @@ Icon = Literal[
 
 
 class _Model(BaseModel):
-    # Ignore unknown keys: LLMs occasionally add extras, which shouldn't fail rendering.
-    model_config = ConfigDict(extra="ignore")
+    # The server builds every component itself, so an unknown key is a bug: reject it.
+    model_config = ConfigDict(extra="forbid")
 
 
 # --------------------------------------------------------------------------- primitives
@@ -151,12 +150,12 @@ class ProgressComponent(_Model):
 
 
 class ButtonComponent(_Model):
-    """Clicking sends `action` + `payload` back to the assistant as a UI event."""
+    """Clicking calls the MCP tool named `action` with `payload` as its arguments."""
 
     type: Literal["button"]
     label: str
-    action: str = Field(description="snake_case action name, e.g. 'show_progress'")
-    payload: dict[str, Any] = Field(default_factory=dict)
+    action: str = Field(description="MCP tool name, e.g. 'complete_set'")
+    payload: dict[str, Any] = Field(default_factory=dict, description="Tool arguments")
     variant: Literal["primary", "secondary", "ghost", "danger"] = "primary"
 
 
@@ -244,6 +243,31 @@ class TimerComponent(_Model):
     seconds: int = Field(ge=5, le=3600)
 
 
+class SessionCardComponent(_Model):
+    """The current step of a guided session: exercise, set X of Y, target."""
+
+    type: Literal["session_card"]
+    exercise: str
+    set_number: int = Field(ge=1)
+    total_sets: int = Field(ge=1)
+    target_reps: int = Field(ge=1)
+    target_weight: float | None = Field(None, ge=0, description="None for bodyweight")
+    unit: Literal["lb", "kg"] = "lb"
+    next_up: str | None = Field(None, description="What comes after this set")
+    form_cue: str | None = None
+
+
+class PlateDiagramComponent(_Model):
+    """Plates to load on each side of the bar."""
+
+    type: Literal["plate_diagram"]
+    total_weight: float = Field(gt=0)
+    bar_weight: float = Field(gt=0)
+    unit: Literal["lb", "kg"] = "lb"
+    plates_per_side: list[float] = Field(description="Heaviest first")
+    remainder: float = Field(0, ge=0, description="Weight that can't be made with plates")
+
+
 # --------------------------------------------------------------------------- union
 
 Component = Annotated[
@@ -260,7 +284,9 @@ Component = Annotated[
     | FormComponent
     | ExerciseCardComponent
     | WorkoutPlanComponent
-    | TimerComponent,
+    | TimerComponent
+    | SessionCardComponent
+    | PlateDiagramComponent,
     Field(discriminator="type"),
 ]
 
@@ -269,6 +295,7 @@ LayoutComponent.model_rebuild()
 
 
 class UISpec(_Model):
-    """Arguments of the `render_ui` tool: an ordered list of top-level components."""
+    """A tool result's `structuredContent`: ordered top-level components plus display mode."""
 
     components: list[Component] = Field(min_length=1, max_length=40)
+    display: Literal["fragment", "full"] = "fragment"

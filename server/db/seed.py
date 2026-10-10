@@ -9,6 +9,7 @@ Deterministic: the same `today` always produces the same history.
 import argparse
 import asyncio
 import random
+import uuid
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -199,8 +200,8 @@ async def seed_demo_user(db: AsyncSession, today: date) -> None:
     )
 
     plan = Plan(user_id=user.id, name=PLAN_NAME, is_active=True)
-    for day_index, (day_name, _, items) in enumerate(PLAN_DAYS):
-        day = PlanDay(day_index=day_index, name=day_name)
+    for day_index, (day_name, weekday, items) in enumerate(PLAN_DAYS):
+        day = PlanDay(day_index=day_index, name=day_name, weekday=weekday)
         day.exercises = [
             PlanExercise(exercise=exercises[pe.exercise], position=pos, sets=pe.sets, reps=pe.reps)
             for pos, pe in enumerate(items)
@@ -223,11 +224,14 @@ async def seed_demo_user(db: AsyncSession, today: date) -> None:
         )
         db.add(session)
         await db.flush()
+        # One batch per exercise per session, like a "log 4 sets of bench" request.
+        batches = {name: str(uuid.uuid4()) for name in {s.exercise for s in sim.sets}}
         db.add_all(
             LoggedSet(
                 user_id=user.id,
                 exercise_id=exercises[s.exercise].id,
                 session_id=session.id,
+                batch_id=batches[s.exercise],
                 reps=s.reps,
                 weight_kg=to_kg(s.weight_lb, "lb"),
                 logged_at=start + timedelta(minutes=MINUTES_PER_SET * i),

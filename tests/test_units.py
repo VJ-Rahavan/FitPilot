@@ -57,14 +57,17 @@ def test_lb_round_trip_is_stable(lb):
 
 def test_display_weight_rounding():
     assert display_weight(to_kg(225, "lb"), "lb") == Decimal("225")
-    assert display_weight(Decimal("102.3"), "kg") == Decimal("102.5")
-    assert display_weight(Decimal("102.2"), "kg") == Decimal("102")
-    assert round_weight(Decimal("134.6"), "lb") == Decimal("135")
+    assert display_weight(to_kg("27.5", "lb"), "lb") == Decimal("27.5")
+    assert display_weight(Decimal("101.25"), "kg") == Decimal("101.25")
+    assert display_weight(Decimal("102.3"), "kg") == Decimal("102.25")
+    assert round_weight(Decimal("134.8"), "lb") == Decimal("135")
+    assert round_weight(Decimal("134.6"), "lb") == Decimal("134.5")
 
 
 def test_format_weight():
     assert format_weight(to_kg(225, "lb"), "lb") == "225 pounds"
     assert format_weight(Decimal("102.5"), "kg") == "102.5 kilograms"
     assert format_weight(Decimal("100"), "kg") == "100 kilograms"
+    assert format_weight(to_kg("27.5", "lb"), "lb") == "27.5 pounds"
     assert format_weight(to_kg(1, "lb"), "lb") == "1 pound"
     assert format_weight(to_kg(225, "lb"), "lb", spoken=False) == "225 lb"

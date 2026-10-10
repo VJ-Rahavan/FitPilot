@@ -132,6 +132,8 @@ class PlanDay(Base):
     plan_id: Mapped[int] = mapped_column(ForeignKey("plans.id", ondelete="CASCADE"))
     day_index: Mapped[int] = mapped_column(Integer)  # 0-based order within the plan
     name: Mapped[str] = mapped_column(String(100))
+    # Scheduled day of the week, 0 = Monday. None = unscheduled (done in rotation).
+    weekday: Mapped[int | None] = mapped_column(Integer)
 
     plan: Mapped[Plan] = relationship(back_populates="days")
     exercises: Mapped[list["PlanExercise"]] = relationship(
@@ -190,6 +192,8 @@ class LoggedSet(Base):
     session_id: Mapped[int | None] = mapped_column(
         ForeignKey("sessions.id", ondelete="SET NULL"), index=True
     )
+    # Sets logged by one request share a batch, so undo removes them together.
+    batch_id: Mapped[str] = mapped_column(String(36), index=True)
     reps: Mapped[int] = mapped_column(Integer)
     weight_kg: Mapped[Decimal] = mapped_column(KG)
     logged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

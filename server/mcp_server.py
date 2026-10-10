@@ -10,6 +10,12 @@ from typing import Any
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.mcpserver import MCPServer
 
+# Importing the tool modules registers their tools on `apps`; that must happen before
+# MCPServer is built, since extension tools are read at construction.
+from server.tools import logging_tools, review_tools  # noqa: F401
+from server.tools.ping import ping
+from server.tools.registry import apps
+
 logger = logging.getLogger("fitgen.tools")
 
 
@@ -39,7 +45,6 @@ mcp = MCPServer(
     ),
     version="0.1.0",
     middleware=[log_tool_timing],
+    extensions=[apps],
 )
-
-# Registers the tool modules on `mcp`.
-from server.tools import ping  # noqa: E402, F401
+mcp.add_tool(ping, description="Check that FitGen is reachable.")

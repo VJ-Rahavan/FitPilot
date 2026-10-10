@@ -121,6 +121,7 @@ async def test_queries_are_scoped_by_user(sessionmaker):
             db,
             other.id,
             exercise_id=squat_id,
+            batch_id="test-batch",
             reps=1,
             weight_kg=to_kg(500, "lb"),
             logged_at=datetime.now(UTC),

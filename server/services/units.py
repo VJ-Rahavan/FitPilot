@@ -44,11 +44,14 @@ def from_kg(weight_kg: float | Decimal, unit: Unit) -> Decimal:
     return kg if unit == "kg" else kg / KG_PER_LB
 
 
+# Finest real increments: 2.5 lb dumbbells → 0.5 lb; 1.25 kg plates/dumbbells → 0.25 kg.
+_PRECISION: dict[Unit, Decimal] = {"lb": Decimal("0.5"), "kg": Decimal("0.25")}
+
+
 def round_weight(weight: Decimal, unit: Unit) -> Decimal:
-    """Round to a sensible spoken precision: whole pounds, or the nearest 0.5 kg."""
-    if unit == "lb":
-        return weight.quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-    return (weight * 2).quantize(Decimal("1"), rounding=ROUND_HALF_UP) / 2
+    """Round to the finest weight a lifter can actually load (no float noise in speech)."""
+    step = _PRECISION[unit]
+    return (weight / step).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * step
 
 
 def display_weight(weight_kg: float | Decimal, unit: Unit) -> Decimal:
@@ -62,9 +65,17 @@ def _fmt_number(value: Decimal) -> str:
     return s.rstrip("0").rstrip(".") if "." in s else s
 
 
-def format_weight(weight_kg: float | Decimal, unit: Unit, *, spoken: bool = True) -> str:
-    """e.g. "225 pounds", "102.5 kilograms" (spoken) or "225 lb" (short)."""
-    value = display_weight(weight_kg, unit)
+def format_weight(
+    weight_kg: float | Decimal, unit: Unit, *, spoken: bool = True, precise: bool = False
+) -> str:
+    """e.g. "225 pounds", "102.5 kilograms" (spoken) or "225 lb" (short).
+
+    `precise` keeps one decimal (bodyweight: "184.2 pounds") instead of lifting precision.
+    """
+    if precise:
+        value = from_kg(weight_kg, unit).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+    else:
+        value = display_weight(weight_kg, unit)
     number = _fmt_number(value)
     if not spoken:
         return f"{number} {unit}"

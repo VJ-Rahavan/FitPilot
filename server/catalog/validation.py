@@ -1,46 +1,45 @@
-"""Validate individual UI components produced by the LLM.
+"""Validate outgoing UI components against the catalog.
 
-Components are validated one at a time so each can be shown as soon as it has been
-generated (see `genui.ui.stream`).
+The server builds every component itself, so a validation failure is a server bug:
+it is logged and raised, never retried or sent to the client.
 """
 
-from dataclasses import dataclass
-from typing import Any
+import logging
+from typing import Any, Literal
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ValidationError
 
-from genui.core.schema_utils import format_validation_error, strip_titles
-from genui.ui.components import Component, UISpec
+from server.catalog.components import UISpec
+from server.catalog.schema_utils import format_validation_error, strip_titles
+
+logger = logging.getLogger("fitgen.catalog")
 
 MAX_NESTING_DEPTH = 6
 
-_COMPONENT = TypeAdapter[Any](Component)
+Display = Literal["fragment", "full"]
 
 
-@dataclass(slots=True, frozen=True)
-class ComponentResult:
-    component: dict[str, Any] | None = None
-    error: str | None = None
-
-    @property
-    def ok(self) -> bool:
-        return self.component is not None
+class ComponentValidationError(RuntimeError):
+    """A tool built components that don't match the catalog (a server bug)."""
 
 
-def validate_component(raw: Any) -> ComponentResult:
-    """Validate one top-level component into a JSON-ready dict (or a readable error)."""
-    if not isinstance(raw, dict):
-        return ComponentResult(error="each component must be a JSON object")
+def validate_components(
+    components: list[dict[str, Any]], display: Display = "fragment"
+) -> dict[str, Any]:
+    """Validate a component list; return the JSON-ready `structuredContent` dict."""
     try:
-        model = _COMPONENT.validate_python(raw)
+        spec = UISpec.model_validate({"components": components, "display": display})
     except ValidationError as exc:
-        return ComponentResult(error=format_validation_error(exc))
-    component: dict[str, Any] = model.model_dump(mode="json", exclude_none=True)
-    if (depth := _depth(component)) > MAX_NESTING_DEPTH:
-        return ComponentResult(
-            error=f"nested {depth} levels deep; the maximum is {MAX_NESTING_DEPTH}"
-        )
-    return ComponentResult(component=component)
+        message = format_validation_error(exc)
+        logger.error("Invalid UI components (server bug):\n%s", message)
+        raise ComponentValidationError(message) from exc
+    out = spec.model_dump(mode="json", exclude_none=True)
+    for component in out["components"]:
+        if (depth := _depth(component)) > MAX_NESTING_DEPTH:
+            message = f"nested {depth} levels deep; the maximum is {MAX_NESTING_DEPTH}"
+            logger.error("Invalid UI components (server bug): %s", message)
+            raise ComponentValidationError(message)
+    return out
 
 
 def ui_json_schema() -> dict[str, Any]:
