@@ -157,10 +157,12 @@ with PRs (insight regeneration is enqueued once Phase 6 exists).
 
 ## Claude Code agents and skills
 
-Project-level helpers in `.claude/`. Agents are read-only and never change git state.
+Project-level helpers in `.claude/`. No agent changes git state; only `implementer`
+edits files.
 
 | Type | Name | Use it for |
 |---|---|---|
+| Agent | `implementer` | Implement an approved plan step, tool or fix, with tests, in the repo's conventions |
 | Agent | `sdk-researcher` | How an SDK really works (MCP, ext-apps, Bedrock, Groq…), from installed source or official docs |
 | Agent | `test-runner` | Run ruff + pytest, report failures with likely causes and any skipped DB tests |
 | Agent | `voice-reviewer` | Check spoken text and tool descriptions for voice quality |

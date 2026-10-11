@@ -27,6 +27,8 @@ say so in the summary.
 
 ## 3. Implement
 
+- Implement directly, or hand independent, well-scoped parts of the approved plan to the
+  `implementer` agent (give it the exact approved scope; review its report and diff).
 - Follow the repo's shape: thin tool handlers in `server/tools/`, domain logic in
   `server/services/`, spoken text and components in `server/presenters/`, queries in
   `server/db/repository.py`. For a new tool, follow the `add-mcp-tool` skill.
