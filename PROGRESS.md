@@ -155,6 +155,20 @@ After any model change, rerun `uv run python -m server.db.seed --reset` (wipes a
 server tracks the active session and position per user; `end_session` returns a summary
 with PRs (insight regeneration is enqueued once Phase 6 exists).
 
+## Claude Code agents and skills
+
+Project-level helpers in `.claude/`. Agents are read-only and never change git state.
+
+| Type | Name | Use it for |
+|---|---|---|
+| Agent | `sdk-researcher` | How an SDK really works (MCP, ext-apps, Bedrock, Groq…), from installed source or official docs |
+| Agent | `test-runner` | Run ruff + pytest, report failures with likely causes and any skipped DB tests |
+| Agent | `voice-reviewer` | Check spoken text and tool descriptions for voice quality |
+| Agent | `rules-reviewer` | Check changes against the non-negotiable rules |
+| Skill | `phase-workflow` | Run one plan phase: propose, wait, implement, verify, summarize, no commits |
+| Skill | `add-mcp-tool` | Recipe for a new tool: service → presenter → `apps.tool` → tests |
+| Skill | `verify-db` | Start Postgres, seed, run the DB tests, troubleshoot Docker and ports |
+
 ## Working agreements
 
 - One phase at a time: propose a plan, wait for OK, implement, test, summarize.
