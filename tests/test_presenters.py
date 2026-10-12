@@ -6,7 +6,7 @@ from decimal import Decimal
 import pytest
 
 from server.catalog.validation import validate_components
-from server.presenters.speech import join_words, say_volume, sets_of_reps
+from server.presenters.speech import join_limited, join_words, say_volume, sets_of_reps
 from server.presenters.workouts import (
     present_body_metric,
     present_error,
@@ -56,6 +56,8 @@ def lb(x) -> Decimal:
 def test_speech_helpers():
     assert join_words(["a"]) == "a"
     assert join_words(["a", "b", "c"]) == "a, b and c"
+    assert join_limited(["a", "b", "c"]) == "a, b and c"
+    assert join_limited(["a", "b", "c", "d", "e"]) == "a, b and 3 more"
     assert sets_of_reps((5, 5, 5)) == "3 sets of 5"
     assert sets_of_reps((8, 8, 6)) == "3 sets of 8, 8 and 6"
     assert sets_of_reps((5,)) == "1 set of 5"
@@ -101,6 +103,11 @@ def test_undo():
     text = check(present_undo(r))
     assert text == "Removed your last log: bench press, 3 sets of 8, 8 and 6 at 185 pounds."
     assert check(present_undo(None)) == "There's nothing to undo yet."
+    in_session = UndoResult("Bench Press", (6,), lb(185), "lb", False, rewound_session=True)
+    assert check(present_undo(in_session)) == (
+        "Removed your last log: bench press, 1 set of 6 at 185 pounds. "
+        "I've moved your workout back to that set."
+    )
 
 
 # --- body metric ---------------------------------------------------------------------------

@@ -116,6 +116,8 @@ def present_undo(r: UndoResult | None) -> Presentation:
         return Presentation(text, [{"type": "alert", "variant": "info", "message": text}])
     at = "" if r.bodyweight else f" at {format_weight(r.weight_kg, r.unit)}"
     text = f"Removed your last log: {spoken_exercise(r.exercise)}, {sets_of_reps(r.reps)}{at}."
+    if r.rewound_session:
+        text += " I've moved your workout back to that set."
     return Presentation(
         text, [{"type": "alert", "variant": "info", "title": "Log removed", "message": text}]
     )
@@ -227,8 +229,11 @@ def present_todays_workout(w: TodaysWorkout) -> Presentation:
         ],
         "rows": rows,
     }
+    start = {"type": "button", "label": "Start workout", "action": "start_session"}
     return Presentation(
-        text, [{"type": "card", "title": f"Today · {w.day_name}", "children": [table]}], "full"
+        text,
+        [{"type": "card", "title": f"Today · {w.day_name}", "children": [table]}, start],
+        "full",
     )
 
 

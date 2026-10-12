@@ -20,7 +20,7 @@ from server.tools.registry import WIDGET_URI, apps, run_tool
 UNIT_DESCRIPTION = 'Weight unit, "lb" or "kg". Omit to use the user\'s preferred unit.'
 
 
-def _unit(value: str | None, default):
+def parse_unit_or_error(value: str | None, default):
     try:
         return parse_unit(value, default=default)
     except ValueError:
@@ -56,7 +56,7 @@ async def log_workout(
             sets=sets,
             reps=reps,
             weight=weight,
-            unit=_unit(unit, ctx.unit),
+            unit=parse_unit_or_error(unit, ctx.unit),
             now=datetime.now(UTC),
         )
         return present_log_workout(result)
@@ -76,7 +76,11 @@ async def log_body_metric(
 ) -> CallToolResult:
     async def handler(db, ctx):
         result = await workouts.log_body_metric(
-            db, ctx, bodyweight=bodyweight, unit=_unit(unit, ctx.unit), now=datetime.now(UTC)
+            db,
+            ctx,
+            bodyweight=bodyweight,
+            unit=parse_unit_or_error(unit, ctx.unit),
+            now=datetime.now(UTC),
         )
         return present_body_metric(result)
 

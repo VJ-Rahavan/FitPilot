@@ -12,7 +12,7 @@ from mcp.server.mcpserver import MCPServer
 
 # Importing the tool modules registers their tools on `apps`; that must happen before
 # MCPServer is built, since extension tools are read at construction.
-from server.tools import logging_tools, review_tools  # noqa: F401
+from server.tools import logging_tools, review_tools, session_tools  # noqa: F401
 from server.tools.ping import ping
 from server.tools.registry import apps
 

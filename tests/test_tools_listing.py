@@ -13,6 +13,10 @@ UI_TOOLS = {
     "get_todays_workout",
     "get_weekly_summary",
     "get_exercise_progress",
+    "start_session",
+    "complete_set",
+    "skip_exercise",
+    "end_session",
 }
 
 

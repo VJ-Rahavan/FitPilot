@@ -13,6 +13,7 @@ from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.db import repository as repo
+from server.db.models import Plan, PlanDay
 from server.services.context import UserContext, UserFacingError
 from server.services.exercise_resolver import ExerciseEntry, ExerciseResolver
 from server.services.insights import fallback_insight
@@ -124,6 +125,7 @@ class UndoResult:
     weight_kg: Decimal
     unit: Unit
     bodyweight: bool
+    rewound_session: bool = False  # the guided session's position stepped back too
 
 
 async def undo_last_log(db: AsyncSession, ctx: UserContext) -> UndoResult | None:
@@ -131,13 +133,35 @@ async def undo_last_log(db: AsyncSession, ctx: UserContext) -> UndoResult | None
     if not batch:
         return None
     await repo.delete_batch(db, ctx.user_id, batch[0].batch_id)
+    rewound = await _rewind_session_for_undo(db, ctx, batch)
     return UndoResult(
         exercise=batch[0].exercise.name,
         reps=tuple(s.reps for s in batch),
         weight_kg=max(s.weight_kg for s in batch),
         unit=ctx.unit,
         bodyweight=batch[0].exercise.equipment == "bodyweight",
+        rewound_session=rewound,
     )
+
+
+async def _rewind_session_for_undo(db: AsyncSession, ctx: UserContext, batch) -> bool:
+    """If the undone set came from `complete_set`, move the guided session back to it.
+
+    Only `complete_set` records `session_exercise_id`, so free-form `log_workout` sets never
+    move the session position.
+    """
+    row_id = batch[0].session_exercise_id
+    if len(batch) != 1 or row_id is None:
+        return False
+    session = await repo.get_active_session_full(db, ctx.user_id)
+    row = next((e for e in session.exercises if e.id == row_id), None) if session else None
+    if row is None:
+        return False
+    remaining = await repo.count_sets_for_session_exercise(db, ctx.user_id, row_id)
+    session.current_position, session.current_set = row.position, remaining
+    row.status = "pending"
+    await db.flush()
+    return True
 
 
 # --- log_body_metric ---------------------------------------------------------------------
@@ -189,30 +213,41 @@ class TodaysWorkout:
     already_trained_today: bool = False
 
 
-async def get_todays_workout(
-    db: AsyncSession, ctx: UserContext, resolver: ExerciseResolver, *, now: datetime
-) -> TodaysWorkout:
-    plan = await repo.get_active_plan(db, ctx.user_id)
-    if plan is None or not plan.days:
-        return TodaysWorkout(ctx.unit, has_plan=False)
+async def pick_plan_day(
+    db: AsyncSession, ctx: UserContext, plan: Plan, today: date
+) -> tuple[PlanDay | None, PlanDay | None]:
+    """(today's scheduled day, or None on a rest day; the next scheduled day on a rest day).
 
-    today = now.astimezone(ctx.tz).date()
+    Plans without weekdays rotate: the day after the last finished session's day.
+    """
     scheduled = [d for d in plan.days if d.weekday is not None]
     if scheduled:
         day = next((d for d in scheduled if d.weekday == today.weekday()), None)
-        if day is None:
-            nxt = min(scheduled, key=lambda d: (d.weekday - today.weekday()) % 7)
-            return TodaysWorkout(
-                ctx.unit, True, next_day_name=nxt.name, next_weekday=WEEKDAYS[nxt.weekday]
-            )
-    else:  # rotation: the day after the last finished session's day
-        last = await repo.get_last_finished_session(db, ctx.user_id)
-        ids = [d.id for d in plan.days]
-        idx = 0
-        if last and last.plan_day_id in ids:
-            idx = (ids.index(last.plan_day_id) + 1) % len(ids)
-        day = plan.days[idx]
+        if day is not None:
+            return day, None
+        nxt = min(scheduled, key=lambda d: (d.weekday - today.weekday()) % 7)
+        return None, nxt
+    last = await repo.get_last_finished_session(db, ctx.user_id)
+    ids = [d.id for d in plan.days]
+    idx = 0
+    if last and last.plan_day_id in ids:
+        idx = (ids.index(last.plan_day_id) + 1) % len(ids)
+    return plan.days[idx], None
 
+
+async def plan_day_targets(
+    db: AsyncSession,
+    ctx: UserContext,
+    resolver: ExerciseResolver,
+    day: PlanDay,
+    *,
+    now: datetime,
+) -> tuple[tuple[PlannedExercise, ...], bool]:
+    """Each exercise of `day` with its suggested weight; and whether anything was logged today.
+
+    Today's own sets are ignored, so suggestions stay stable during the day.
+    """
+    today = now.astimezone(ctx.tz).date()
     exercise_ids = [pe.exercise_id for pe in day.exercises]
     history = await repo.get_sets_for_exercises(
         db, ctx.user_id, exercise_ids, since=now - HISTORY_FOR_SUGGESTIONS
@@ -222,7 +257,7 @@ async def get_todays_workout(
     for s in history:
         if s.logged_at.astimezone(ctx.tz).date() == today:
             trained_today = True
-            continue  # today's sets don't count toward today's suggestion
+            continue
         by_exercise[s.exercise_id].append((s.logged_at, s.reps, s.weight_kg))
 
     items = []
@@ -236,8 +271,24 @@ async def get_todays_workout(
             unit=ctx.unit,
         )
         items.append(PlannedExercise(entry, pe.sets, pe.reps, suggestion))
+    return tuple(items), trained_today
+
+
+async def get_todays_workout(
+    db: AsyncSession, ctx: UserContext, resolver: ExerciseResolver, *, now: datetime
+) -> TodaysWorkout:
+    plan = await repo.get_active_plan(db, ctx.user_id)
+    if plan is None or not plan.days:
+        return TodaysWorkout(ctx.unit, has_plan=False)
+
+    day, next_day = await pick_plan_day(db, ctx, plan, now.astimezone(ctx.tz).date())
+    if day is None:
+        return TodaysWorkout(
+            ctx.unit, True, next_day_name=next_day.name, next_weekday=WEEKDAYS[next_day.weekday]
+        )
+    items, trained_today = await plan_day_targets(db, ctx, resolver, day, now=now)
     return TodaysWorkout(
-        ctx.unit, True, day_name=day.name, items=tuple(items), already_trained_today=trained_today
+        ctx.unit, True, day_name=day.name, items=items, already_trained_today=trained_today
     )
 
 

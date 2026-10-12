@@ -13,6 +13,7 @@ from server.db.models import (
     BodyMetric,
     Exercise,
     Insight,
+    Job,
     LoggedSet,
     Plan,
     PlanDay,
@@ -85,6 +86,44 @@ async def get_last_finished_session(db: AsyncSession, user_id: int) -> WorkoutSe
     )
 
 
+async def get_active_session_full(db: AsyncSession, user_id: int) -> WorkoutSession | None:
+    """The active session with its exercise snapshot (and each exercise) loaded."""
+    return await db.scalar(
+        select(WorkoutSession)
+        .where(WorkoutSession.user_id == user_id, WorkoutSession.status == "active")
+        .options(selectinload(WorkoutSession.exercises), selectinload(WorkoutSession.plan_day))
+    )
+
+
+async def get_session_sets(db: AsyncSession, user_id: int, session_id: int) -> list[LoggedSet]:
+    """Oldest first."""
+    return list(
+        await db.scalars(
+            select(LoggedSet)
+            .where(LoggedSet.user_id == user_id, LoggedSet.session_id == session_id)
+            .order_by(LoggedSet.logged_at, LoggedSet.id)
+        )
+    )
+
+
+async def count_sets_for_session_exercise(
+    db: AsyncSession, user_id: int, session_exercise_id: int
+) -> int:
+    return await db.scalar(
+        select(func.count())
+        .select_from(LoggedSet)
+        .where(LoggedSet.user_id == user_id, LoggedSet.session_exercise_id == session_exercise_id)
+    )
+
+
+async def delete_session(db: AsyncSession, user_id: int, session_id: int) -> None:
+    await db.execute(
+        delete(WorkoutSession).where(
+            WorkoutSession.user_id == user_id, WorkoutSession.id == session_id
+        )
+    )
+
+
 # --- Logged sets -------------------------------------------------------------------------
 
 
@@ -98,10 +137,12 @@ async def add_logged_set(
     logged_at: datetime,
     batch_id: str,
     session_id: int | None = None,
+    session_exercise_id: int | None = None,
 ) -> LoggedSet:
     row = LoggedSet(
         user_id=user_id,
         batch_id=batch_id,
+        session_exercise_id=session_exercise_id,
         exercise_id=exercise_id,
         reps=reps,
         weight_kg=weight_kg,
@@ -270,3 +311,20 @@ async def get_insight(db: AsyncSession, user_id: int, week_start: date) -> Insig
     return await db.scalar(
         select(Insight).where(Insight.user_id == user_id, Insight.week_start == week_start)
     )
+
+
+# --- Jobs --------------------------------------------------------------------------------
+
+
+async def enqueue_job(
+    db: AsyncSession, user_id: int, kind: str, payload: dict | None = None
+) -> bool:
+    """Queue a background job unless the same kind is already queued for the user."""
+    already = await db.scalar(
+        select(Job.id).where(Job.user_id == user_id, Job.kind == kind, Job.status == "queued")
+    )
+    if already is not None:
+        return False
+    db.add(Job(user_id=user_id, kind=kind, status="queued", payload=payload or {}))
+    await db.flush()
+    return True

@@ -3,7 +3,6 @@
 Skipped when TEST_DATABASE_URL is unreachable. The database is wiped and reseeded.
 """
 
-import os
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime
 
@@ -29,10 +28,8 @@ from server.db.seed_data import EXERCISES
 from server.db.session import make_engine
 from server.services.exercise_resolver import ExerciseResolver
 from server.services.units import display_weight, to_kg
+from tests.db_support import TEST_DATABASE_URL
 
-TEST_DATABASE_URL = os.environ.get(
-    "TEST_DATABASE_URL", "postgresql+asyncpg://fitgen:fitgen@localhost:5434/fitgen_test"
-)
 TODAY = date(2026, 10, 10)
 
 pytestmark = pytest.mark.asyncio(loop_scope="module")

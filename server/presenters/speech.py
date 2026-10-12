@@ -17,6 +17,14 @@ def join_words(items: list[str]) -> str:
     return f"{', '.join(items[:-1])} and {items[-1]}"
 
 
+def join_limited(items: list[str], limit: int = 3) -> str:
+    """Like join_words, but long lists end in "and N more" so they stay short to hear."""
+    if len(items) <= limit:
+        return join_words(items)
+    shown = items[: limit - 1]
+    return join_words([*shown, f"{len(items) - len(shown)} more"])
+
+
 def sets_of_reps(reps: tuple[int, ...] | list[int]) -> str:
     """(5, 5, 5) → "3 sets of 5"; (8, 8, 6) → "3 sets of 8, 8 and 6"."""
     reps = list(reps)
