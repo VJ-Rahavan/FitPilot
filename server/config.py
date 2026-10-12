@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     auth_mode: Literal["none", "api_key", "oauth"] = "none"
     api_key: str = ""
 
-    database_url: str = "postgresql+asyncpg://fitgen:fitgen@localhost:5433/fitgen"
+    database_url: str = "postgresql+asyncpg://fitgen:fitgen@localhost:5434/fitgen"
 
     llm_provider: Literal["groq", "bedrock"] = "groq"
     groq_api_key: str = ""

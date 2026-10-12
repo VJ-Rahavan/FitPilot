@@ -31,7 +31,7 @@ from server.services.exercise_resolver import ExerciseResolver
 from server.services.units import display_weight, to_kg
 
 TEST_DATABASE_URL = os.environ.get(
-    "TEST_DATABASE_URL", "postgresql+asyncpg://fitgen:fitgen@localhost:5433/fitgen_test"
+    "TEST_DATABASE_URL", "postgresql+asyncpg://fitgen:fitgen@localhost:5434/fitgen_test"
 )
 TODAY = date(2026, 10, 10)
 

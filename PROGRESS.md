@@ -1,10 +1,9 @@
 # FitGen for Alexa+: Progress
 
-Status of the build against the implementation plan. Last updated 2026-10-11.
+Status of the build against the implementation plan. Last updated 2026-10-12.
 
-**Summary:** Phases 0–3 of 11 are done and committed on `feature/alexa-mcp-server`.
-Phases 0–1 are fully verified. Phases 2–3 are written and unit-tested, but their database
-code has not yet run against a real Postgres (Docker was unavailable).
+**Summary:** Phases 0–3 of 11 are done on `feature/alexa-mcp-server` and verified end to
+end: all 126 tests pass against a real Postgres, and every tool call takes 6–32 ms.
 
 ## Phase status
 
@@ -12,8 +11,8 @@ code has not yet run against a real Postgres (Docker was unavailable).
 |---|---|---|
 | 0 | Repo setup | ✅ Done |
 | 1 | MCP server skeleton | ✅ Done, verified end to end |
-| 2 | Data layer | ⚠️ Written; DB tests pending |
-| 3 | Catalog, presenters, MVP tools | ⚠️ Written; DB tests pending |
+| 2 | Data layer | ✅ Done, verified against Postgres |
+| 3 | Catalog, presenters, MVP tools | ✅ Done, verified end to end |
 | 4 | Guided session | ⏳ Not started |
 | 5 | Widget (MCP Apps) | ⏳ Not started |
 | 6 | Background AI jobs | ⏳ Not started |
@@ -29,7 +28,8 @@ code has not yet run against a real Postgres (Docker was unavailable).
 - Repo layout per the plan, MIT `LICENSE`, empty `FRICTION_LOG.md` and `FEEDBACK.md`.
 - Python tooling: uv, ruff, pytest (`pyproject.toml`).
 - Node scaffolds (Vite + React + TypeScript) in `widget/` and `client/web/`.
-- `infra/docker-compose.yml`: Postgres 16 on host port **5433** (5432 was already in use).
+- `infra/docker-compose.yml`: Postgres 16 on host port **5434** (5432/5433 are used by other
+  projects on the dev machine).
 - Import commit `aa19c70` "Import component catalog and renderer from FitGen
   (pre-hackathon)": the 14-component catalog and React renderer copied unchanged.
   Everything after it is hackathon work.
@@ -103,12 +103,18 @@ code has not yet run against a real Postgres (Docker was unavailable).
 | `user_profiles.timezone` (demo: `Asia/Kolkata`) | "Today" and "this week" depend on the user's local date |
 | `plan_days.weekday` | Lets "today's workout" come from the schedule in the database |
 | Spoken weights round to 0.5 lb / 0.25 kg | So a 27.5 lb dumbbell isn't read out as "28 pounds" |
+| Postgres on host port 5434 | Another project's container (`todo_postgres`) holds 5433 |
 | Demo user has fixed id 1 | Keeps `get_current_user()` free of DB lookups until OAuth |
 | No tool `outputSchema` | The full catalog schema is large; tools validate against it before sending instead |
 
 ## Tests
 
-126 tests: **109 pass, 17 skipped**. The skipped tests need Postgres.
+126 tests, **all passing** against Postgres 16 (2026-10-12). Without a reachable database
+the 17 DB tests skip, which is not full verification.
+
+Measured tool latency (server timing log, local Postgres): `get_todays_workout` 32 ms,
+`log_workout` 25 ms, `get_weekly_summary` 14 ms, `log_body_metric` 8 ms,
+`undo_last_log` 8 ms, `get_exercise_progress` 6 ms. Budget: 500 ms.
 
 | Area | File | Needs DB |
 |---|---|---|
@@ -127,7 +133,7 @@ code has not yet run against a real Postgres (Docker was unavailable).
 
 ```bash
 cp .env.example .env
-docker compose -f infra/docker-compose.yml up -d    # Postgres 16 on localhost:5433
+docker compose -f infra/docker-compose.yml up -d    # Postgres 16 on localhost:5434
 uv sync
 uv run python -m server.db.seed --reset              # tables + demo data
 uv run pytest
@@ -139,14 +145,11 @@ After any model change, rerun `uv run python -m server.db.seed --reset` (wipes a
 
 ## Open items
 
-1. **Run the database tests.** Docker Desktop was unresponsive. Either restart it, or
-   point `DATABASE_URL` / `TEST_DATABASE_URL` at the Postgres already on port 5432.
-   Then seed and run `uv run pytest`; the 17 skipped tests should pass.
-2. **MCP Apps capability on 2025-11-25.** The SDK advertises extensions under
+1. **MCP Apps capability on 2025-11-25.** The SDK advertises extensions under
    `capabilities.extensions` only for protocol 2026-07-28, so a 2025-11-25 connection
    doesn't announce MCP Apps there. Tools still carry `_meta.ui.resourceUri`. Check the
    ext-apps spec in Phase 5.
-3. **Deployment note for Phase 9.** The SDK's DNS-rebinding protection defaults to
+2. **Deployment note for Phase 9.** The SDK's DNS-rebinding protection defaults to
    localhost hosts; allowed hosts must be configured behind the ALB.
 
 ## Next up: Phase 4, guided session
