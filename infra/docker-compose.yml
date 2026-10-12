@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: fitgen
       POSTGRES_DB: fitgen
     ports:
-      - "${POSTGRES_PORT:-5433}:5432"
+      - "${POSTGRES_PORT:-5434}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./postgres-init:/docker-entrypoint-initdb.d:ro

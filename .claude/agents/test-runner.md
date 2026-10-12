@@ -12,7 +12,7 @@ You verify the FitGen for Alexa+ repo and report results. You diagnose; you don'
 1. Lint and format:
    `uv run ruff check .` and `uv run ruff format --check .`
 2. Database availability: check whether Postgres answers on the test URL
-   (`TEST_DATABASE_URL`, default `postgresql+asyncpg://fitgen:fitgen@localhost:5433/fitgen_test`).
+   (`TEST_DATABASE_URL`, default `postgresql+asyncpg://fitgen:fitgen@localhost:5434/fitgen_test`).
    The DB tests skip themselves when it's unreachable; report that clearly, because a
    green run with skips is not full verification.
 3. If the main database is reachable and the task calls for it, reseed:

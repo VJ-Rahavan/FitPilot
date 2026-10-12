@@ -12,11 +12,12 @@ unreachable. A run with those skips is **not** full verification; say so explici
 
 | Setting | Default | Used by |
 |---|---|---|
-| `DATABASE_URL` | `postgresql+asyncpg://fitgen:fitgen@localhost:5433/fitgen` | server, seed |
-| `TEST_DATABASE_URL` | `postgresql+asyncpg://fitgen:fitgen@localhost:5433/fitgen_test` | tests (wiped each run) |
+| `DATABASE_URL` | `postgresql+asyncpg://fitgen:fitgen@localhost:5434/fitgen` | server, seed |
+| `TEST_DATABASE_URL` | `postgresql+asyncpg://fitgen:fitgen@localhost:5434/fitgen_test` | tests (wiped each run) |
 
-Compose maps container 5432 to host **5433** (`POSTGRES_PORT` overrides it), because
-something else already listens on 5432 on the dev machine.
+Compose maps container 5432 to host **5434** (`POSTGRES_PORT` overrides it). Other
+projects on the dev machine use 5432/5433 (e.g. the `todo_postgres` container on 5433);
+leave their containers alone.
 
 ## Steps
 
@@ -35,11 +36,16 @@ something else already listens on 5432 on the dev machine.
 
 ## Troubleshooting
 
-- **Docker hangs** (`docker version` never returns, socket ping times out): Docker
-  Desktop is stuck. Ask the user to quit and reopen it. Don't kill processes yourself.
-- **Use an existing local Postgres instead:** if something on port 5432 is a Postgres the
-  user controls, it can host the `fitgen` role and both databases. Ask before creating
-  anything on it, then set both URLs in `.env` to port 5432.
+- **Docker hangs** (`docker version` never returns, socket ping times out, the app window
+  won't open): the background engine is frozen and new launches hand off to it. Check
+  `ps -axo pid,etime,command | grep com.docker` (days-old processes) and the logs in
+  `~/Library/Containers/com.docker.docker/Data/log/host/`. With the user's permission:
+  `pkill -f com.docker.backend; pkill -f com.docker.build; pkill -f com.docker.virtualization`
+  (`kill -9` any backend that ignores it; leave `com.docker.vmnetd` alone), then
+  `open -a Docker`. Restarting the Mac also works.
+- **`port is already allocated`:** another container holds 5434. Check with
+  `docker ps`, don't stop other projects' containers; run with `POSTGRES_PORT=<free port>`
+  and set both URLs (env or `.env`) to that port.
 - **`password authentication failed` / `database does not exist`:** the volume was created
   with different settings, or step 2's test DB wasn't created. Removing the volume
   (`docker compose -f infra/docker-compose.yml down -v`) deletes all local data, so ask
@@ -50,5 +56,5 @@ something else already listens on 5432 on the dev machine.
 
 ## Report
 
-State the Postgres source (compose on 5433, or local on 5432), seed result, and the
+State the Postgres source (compose on 5434, or the override port), seed result, and the
 pytest line with pass/fail/skip counts. Any remaining skip means not fully verified.

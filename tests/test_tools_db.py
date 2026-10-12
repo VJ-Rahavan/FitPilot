@@ -3,83 +3,13 @@
 Skipped when Postgres (TEST_DATABASE_URL) is unreachable.
 """
 
-import asyncio
-import os
 import time
-from collections.abc import Iterator
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 import httpx2
-import pytest
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 
-from server.config import Settings, get_settings
-from server.db import session as db_session
-from server.db.seed import DEMO_TIMEZONE
-from server.db.seed import run as run_seed
-from server.services.resolver_cache import clear_resolver_cache
-from tests.conftest import _serve
-from tests.test_db import TEST_DATABASE_URL
-
-LATENCY_BUDGET_MS = 500
-
-
-async def _db_reachable() -> bool:
-    engine = db_session.make_engine(TEST_DATABASE_URL)
-    try:
-        async with engine.connect():
-            return True
-    except Exception:
-        return False
-    finally:
-        await engine.dispose()
-
-
-def _reset_db_caches() -> None:
-    get_settings.cache_clear()
-    db_session.get_engine.cache_clear()
-    db_session.get_sessionmaker.cache_clear()
-    clear_resolver_cache()
-
-
-@pytest.fixture(scope="module")
-def tools_url() -> Iterator[str]:
-    if not asyncio.run(_db_reachable()):
-        pytest.skip("Postgres not reachable at TEST_DATABASE_URL")
-    today = datetime.now(ZoneInfo(DEMO_TIMEZONE)).date()
-    asyncio.run(run_seed(TEST_DATABASE_URL, reset=True, today=today))
-
-    previous = os.environ.get("DATABASE_URL")
-    os.environ["DATABASE_URL"] = TEST_DATABASE_URL
-    _reset_db_caches()
-    try:
-        yield from _serve(Settings(auth_mode="none", database_url=TEST_DATABASE_URL))
-    finally:
-        if previous is None:
-            os.environ.pop("DATABASE_URL", None)
-        else:
-            os.environ["DATABASE_URL"] = previous
-        _reset_db_caches()
-
-
-async def call(url: str, name: str, args: dict | None = None):
-    async with httpx2.AsyncClient() as http:
-        async with streamable_http_client(url, http_client=http) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                return await session.call_tool(name, args or {})
-
-
-def text_of(result) -> str:
-    return result.content[0].text
-
-
-def assert_three_parts(result, display: str) -> None:
-    assert result.content and result.content[0].type == "text"
-    assert result.structured_content["display"] == display
-    assert result.structured_content["components"]
+from tests.db_support import LATENCY_BUDGET_MS, assert_three_parts, call, text_of
 
 
 async def test_log_workout_dedupe_and_undo(tools_url):

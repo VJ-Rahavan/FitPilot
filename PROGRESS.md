@@ -1,10 +1,9 @@
 # FitGen for Alexa+: Progress
 
-Status of the build against the implementation plan. Last updated 2026-10-11.
+Status of the build against the implementation plan. Last updated 2026-10-12.
 
-**Summary:** Phases 0–3 of 11 are done and committed on `feature/alexa-mcp-server`.
-Phases 0–1 are fully verified. Phases 2–3 are written and unit-tested, but their database
-code has not yet run against a real Postgres (Docker was unavailable).
+**Summary:** Phases 0–4 of 11 are done on `feature/alexa-mcp-server` and verified end to
+end: all 152 tests pass against a real Postgres, and every tool call takes 6–36 ms.
 
 ## Phase status
 
@@ -12,9 +11,9 @@ code has not yet run against a real Postgres (Docker was unavailable).
 |---|---|---|
 | 0 | Repo setup | ✅ Done |
 | 1 | MCP server skeleton | ✅ Done, verified end to end |
-| 2 | Data layer | ⚠️ Written; DB tests pending |
-| 3 | Catalog, presenters, MVP tools | ⚠️ Written; DB tests pending |
-| 4 | Guided session | ⏳ Not started |
+| 2 | Data layer | ✅ Done, verified against Postgres |
+| 3 | Catalog, presenters, MVP tools | ✅ Done, verified end to end |
+| 4 | Guided session | ✅ Done, verified end to end |
 | 5 | Widget (MCP Apps) | ⏳ Not started |
 | 6 | Background AI jobs | ⏳ Not started |
 | 7 | Stretch utilities | ⏳ Not started |
@@ -29,7 +28,8 @@ code has not yet run against a real Postgres (Docker was unavailable).
 - Repo layout per the plan, MIT `LICENSE`, empty `FRICTION_LOG.md` and `FEEDBACK.md`.
 - Python tooling: uv, ruff, pytest (`pyproject.toml`).
 - Node scaffolds (Vite + React + TypeScript) in `widget/` and `client/web/`.
-- `infra/docker-compose.yml`: Postgres 16 on host port **5433** (5432 was already in use).
+- `infra/docker-compose.yml`: Postgres 16 on host port **5434** (5432/5433 are used by other
+  projects on the dev machine).
 - Import commit `aa19c70` "Import component catalog and renderer from FitGen
   (pre-hackathon)": the 14-component catalog and React renderer copied unchanged.
   Everything after it is hackathon work.
@@ -91,6 +91,41 @@ code has not yet run against a real Postgres (Docker was unavailable).
   units in full; helpful voice errors ("Did you mean bench press or overhead press?").
 - No LLM calls on the request path.
 
+### Phase 4: Guided session
+
+- **Tools:**
+
+  | Tool | Inputs | Display |
+  |---|---|---|
+  | `start_session` | (none) | full |
+  | `complete_set` | reps?, weight?, unit? | fragment |
+  | `skip_exercise` | (none) | fragment |
+  | `end_session` | (none) | full |
+
+- **Server-owned position:** `sessions.current_position` / `current_set`; no IDs from the
+  client. Targets are snapshotted into a new `session_exercises` table at start, so
+  defaults stay fixed for the whole workout. A weight the user changes carries to the
+  remaining sets of that exercise.
+- **Flow:**
+  - `start_session` starts today's plan day, or resumes today's active workout.
+  - On a rest day it starts the next scheduled day and says so.
+  - An active workout from an earlier day is closed first (deleted if it has no sets).
+  - After the last set the workout stays open until `end_session` ("Say end workout to
+    wrap up").
+  - `end_session` with no sets cancels the workout.
+- **Short replies between sets:** `complete_set` says "Set 2 of 4 done." and adds reps or
+  weight only when they differ from the target, plus records and the next exercise.
+  `session_card`, a rest `timer` (120 s barbell, 90 s other) and control buttons are
+  returned for the widget.
+- **Undo:** `undo_last_log` on a guided set moves the workout back to that set. Guided sets
+  record `logged_sets.session_exercise_id`, so free-form `log_workout` sets never rewind
+  the workout.
+- **Retries:** a repeated `complete_set` within 8 s is treated as a retried request and not
+  logged twice.
+- **Background job hook:** `end_session` queues a `regenerate_weekly_insight` row in `jobs`
+  (one queued per user) for the Phase 6 worker.
+- `get_todays_workout` now includes a "Start workout" button.
+
 ## Decisions and deviations from the plan
 
 | Decision | Reason |
@@ -103,12 +138,24 @@ code has not yet run against a real Postgres (Docker was unavailable).
 | `user_profiles.timezone` (demo: `Asia/Kolkata`) | "Today" and "this week" depend on the user's local date |
 | `plan_days.weekday` | Lets "today's workout" come from the schedule in the database |
 | Spoken weights round to 0.5 lb / 0.25 kg | So a 27.5 lb dumbbell isn't read out as "28 pounds" |
+| Postgres on host port 5434 | Another project's container (`todo_postgres`) holds 5433 |
+| `session_exercises` snapshot table | Default reps and weights stay fixed during a workout even if other sets are logged |
+| Rest day starts the next scheduled day | Training on an off day is common; Alexa says which day it started |
+| Workout stays open after the last set | Lets the user add a set before saying "end workout" |
+| `complete_set` speaks details only when they differ | It's heard after every set; "Set 2 of 4 done." is enough |
+| 8 s retry guard on `complete_set` | Voice requests get retried; a real set never follows the last one that fast |
 | Demo user has fixed id 1 | Keeps `get_current_user()` free of DB lookups until OAuth |
 | No tool `outputSchema` | The full catalog schema is large; tools validate against it before sending instead |
 
 ## Tests
 
-126 tests: **109 pass, 17 skipped**. The skipped tests need Postgres.
+152 tests, **all passing** against Postgres 16 (2026-10-12). Without a reachable database
+the DB tests skip, which is not full verification.
+
+Measured tool latency (server timing log, local Postgres): `get_todays_workout` 32 ms,
+`log_workout` 25 ms, `get_weekly_summary` 14 ms, `log_body_metric` 8 ms,
+`undo_last_log` 8 ms, `get_exercise_progress` 6 ms; `start_session` 36 ms, `end_session`
+24 ms, `complete_set` 14 ms, `skip_exercise` 6 ms. Budget: 500 ms.
 
 | Area | File | Needs DB |
 |---|---|---|
@@ -122,12 +169,15 @@ code has not yet run against a real Postgres (Docker was unavailable).
 | Tool listing, schemas, widget resource | `tests/test_tools_listing.py` | No |
 | Models, seed, repository, user scoping | `tests/test_db.py` | **Yes** |
 | All six tools end to end + < 500 ms latency | `tests/test_tools_db.py` | **Yes** |
+| Session position state machine | `tests/test_session_state.py` | No |
+| Session presenters (spoken text + components) | `tests/test_session_presenters.py` | No |
+| Guided session end to end: walk-through, skip, resume, undo, retries, stale, latency | `tests/test_sessions_db.py` | **Yes** |
 
 ## How to run
 
 ```bash
 cp .env.example .env
-docker compose -f infra/docker-compose.yml up -d    # Postgres 16 on localhost:5433
+docker compose -f infra/docker-compose.yml up -d    # Postgres 16 on localhost:5434
 uv sync
 uv run python -m server.db.seed --reset              # tables + demo data
 uv run pytest
@@ -139,21 +189,20 @@ After any model change, rerun `uv run python -m server.db.seed --reset` (wipes a
 
 ## Open items
 
-1. **Run the database tests.** Docker Desktop was unresponsive. Either restart it, or
-   point `DATABASE_URL` / `TEST_DATABASE_URL` at the Postgres already on port 5432.
-   Then seed and run `uv run pytest`; the 17 skipped tests should pass.
-2. **MCP Apps capability on 2025-11-25.** The SDK advertises extensions under
+1. **MCP Apps capability on 2025-11-25.** The SDK advertises extensions under
    `capabilities.extensions` only for protocol 2026-07-28, so a 2025-11-25 connection
    doesn't announce MCP Apps there. Tools still carry `_meta.ui.resourceUri`. Check the
    ext-apps spec in Phase 5.
-3. **Deployment note for Phase 9.** The SDK's DNS-rebinding protection defaults to
+2. **Deployment note for Phase 9.** The SDK's DNS-rebinding protection defaults to
    localhost hosts; allowed hosts must be configured behind the ALB.
 
-## Next up: Phase 4, guided session
+## Next up: Phase 5, widget (MCP Apps)
 
-`start_session`, `complete_set(reps?, weight?)`, `skip_exercise`, `end_session`. The
-server tracks the active session and position per user; `end_session` returns a summary
-with PRs (insight regeneration is enqueued once Phase 6 exists).
+React + Vite single-file widget using `@modelcontextprotocol/ext-apps` for the host
+bridge, rendering the catalog components (including `session_card`, `timer` and the
+control buttons, which call tools), light/dark theme from hostContext, served as a hashed
+`ui://fitgen/widget-<hash>.html` resource. Resolve open item 1 (MCP Apps capability on
+2025-11-25) first.
 
 ## Claude Code agents and skills
 

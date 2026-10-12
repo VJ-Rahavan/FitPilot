@@ -9,7 +9,7 @@ Work in progress. Full docs land in Phase 9.
 
 ```bash
 cp .env.example .env
-docker compose -f infra/docker-compose.yml up -d   # Postgres 16 on localhost:5433
+docker compose -f infra/docker-compose.yml up -d   # Postgres 16 on localhost:5434
 uv sync
 uv run python -m server.db.seed --reset           # create tables + demo user with 8 weeks of history
 uv run ruff check .

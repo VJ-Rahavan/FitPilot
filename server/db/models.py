@@ -172,11 +172,41 @@ class WorkoutSession(TimestampMixin, Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     plan_day_id: Mapped[int | None] = mapped_column(ForeignKey("plan_days.id"))
     status: Mapped[str] = mapped_column(String(10), default="active")
-    # Position within the plan day: which exercise, and how many sets done of it.
+    # Position in `exercises`: which exercise, and how many sets of it are done.
     current_position: Mapped[int] = mapped_column(Integer, default=0)
     current_set: Mapped[int] = mapped_column(Integer, default=0)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    plan_day: Mapped["PlanDay | None"] = relationship()
+    exercises: Mapped[list["SessionExercise"]] = relationship(
+        back_populates="session", cascade="all, delete-orphan", order_by="SessionExercise.position"
+    )
+
+
+class SessionExercise(Base):
+    """Snapshot of a guided session's exercises and targets, taken when it starts."""
+
+    __tablename__ = "session_exercises"
+    __table_args__ = (
+        UniqueConstraint("session_id", "position"),
+        CheckConstraint(
+            "status IN ('pending', 'done', 'skipped')", name="ck_session_exercise_status"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"))
+    position: Mapped[int] = mapped_column(Integer)
+    exercise_id: Mapped[int] = mapped_column(ForeignKey("exercises.id"))
+    sets: Mapped[int] = mapped_column(Integer)
+    reps: Mapped[int] = mapped_column(Integer)
+    # None until known (no history yet); 0 for bodyweight. Updated if the user changes weight.
+    target_weight_kg: Mapped[Decimal | None] = mapped_column(KG)
+    status: Mapped[str] = mapped_column(String(10), default="pending")
+
+    session: Mapped[WorkoutSession] = relationship(back_populates="exercises")
+    exercise: Mapped[Exercise] = relationship()
 
 
 class LoggedSet(Base):
@@ -194,6 +224,10 @@ class LoggedSet(Base):
     )
     # Sets logged by one request share a batch, so undo removes them together.
     batch_id: Mapped[str] = mapped_column(String(36), index=True)
+    # Set only by complete_set: the guided-session exercise this set counts toward.
+    session_exercise_id: Mapped[int | None] = mapped_column(
+        ForeignKey("session_exercises.id", ondelete="SET NULL"), index=True
+    )
     reps: Mapped[int] = mapped_column(Integer)
     weight_kg: Mapped[Decimal] = mapped_column(KG)
     logged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
