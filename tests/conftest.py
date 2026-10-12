@@ -46,12 +46,12 @@ def _serve(settings: Settings) -> Iterator[str]:
 
 @pytest.fixture(scope="session")
 def mcp_url() -> Iterator[str]:
-    yield from _serve(Settings(auth_mode="none"))
+    yield from _serve(Settings(auth_mode="none", worker_enabled=False))
 
 
 @pytest.fixture(scope="session")
 def mcp_url_api_key() -> Iterator[str]:
-    yield from _serve(Settings(auth_mode="api_key", api_key=TEST_API_KEY))
+    yield from _serve(Settings(auth_mode="api_key", api_key=TEST_API_KEY, worker_enabled=False))
 
 
 @pytest.fixture(scope="module")
@@ -66,7 +66,9 @@ def tools_url() -> Iterator[str]:
     os.environ["DATABASE_URL"] = TEST_DATABASE_URL
     reset_db_caches()
     try:
-        yield from _serve(Settings(auth_mode="none", database_url=TEST_DATABASE_URL))
+        yield from _serve(
+            Settings(auth_mode="none", database_url=TEST_DATABASE_URL, worker_enabled=False)
+        )
     finally:
         if previous is None:
             os.environ.pop("DATABASE_URL", None)

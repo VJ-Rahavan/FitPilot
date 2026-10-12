@@ -95,6 +95,6 @@ async def log_body_metric(
 )
 async def undo_last_log() -> CallToolResult:
     async def handler(db, ctx):
-        return present_undo(await workouts.undo_last_log(db, ctx))
+        return present_undo(await workouts.undo_last_log(db, ctx, now=datetime.now(UTC)))
 
     return await run_tool(handler)

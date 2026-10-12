@@ -184,14 +184,23 @@ def _summary(**kw):
     return WeeklySummary(**base)
 
 
-def test_weekly_summary():
-    text = check(present_weekly_summary(_summary()), "full")
+def test_weekly_summary_past_week_compares():
+    text = check(present_weekly_summary(_summary(weeks_ago=1)), "full")
     assert text.startswith(
-        "This week you trained 3 of 4 planned days and lifted about 24,500 pounds"
+        "Last week you trained 3 of 4 planned days and lifted about 24,500 pounds"
     )
     assert "up 8 percent from the week before" in text
     assert "New records on bench press." in text
     assert text.endswith("Coach's note: Fit in one more session next week.")
+
+
+def test_weekly_summary_current_week_has_no_comparison():
+    p = present_weekly_summary(_summary(volume_kg=lb(1_100)))
+    text = check(p, "full")
+    assert text.startswith("So far this week you trained 3 of 4 planned days")
+    assert "percent" not in text
+    volume = p.components[1]["children"][1]
+    assert "change_pct" not in volume
 
 
 def test_weekly_summary_empty_and_past():

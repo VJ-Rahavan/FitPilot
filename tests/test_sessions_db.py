@@ -19,7 +19,8 @@ from server.auth import DEMO_USER
 from server.db.models import Exercise, Job, LoggedSet, WorkoutSession
 from server.db.session import make_engine
 from server.services import sessions
-from server.services.sessions import ALL_EXERCISES_DONE, INSIGHT_JOB, NO_ACTIVE_SESSION
+from server.services.sessions import ALL_EXERCISES_DONE, NO_ACTIVE_SESSION
+from server.services.workouts import INSIGHT_JOB
 from tests.db_support import (
     LATENCY_BUDGET_MS,
     TEST_DATABASE_URL,

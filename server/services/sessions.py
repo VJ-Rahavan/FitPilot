@@ -18,9 +18,8 @@ from server.services.exercise_resolver import ExerciseEntry, ExerciseResolver
 from server.services.records import PRKind, detect_pr
 from server.services.session_state import Position, after_set, after_skip
 from server.services.units import Unit, to_kg
-from server.services.workouts import pick_plan_day, plan_day_targets
+from server.services.workouts import pick_plan_day, plan_day_targets, queue_insight
 
-INSIGHT_JOB = "regenerate_weekly_insight"
 # A repeated complete_set this soon after the last one is a retried request, not a new set.
 RETRY_WINDOW = timedelta(seconds=8)
 
@@ -105,7 +104,9 @@ class StartResult:
     closed_stale_on: date | None  # an unfinished workout from this day was closed
 
 
-async def _close_stale(db: AsyncSession, ctx: UserContext, session: WorkoutSession) -> bool:
+async def _close_stale(
+    db: AsyncSession, ctx: UserContext, session: WorkoutSession, now: datetime
+) -> bool:
     """Finish an old active session (or delete it if empty). True if it had sets."""
     sets = await repo.get_session_sets(db, ctx.user_id, session.id)
     if not sets:
@@ -114,7 +115,7 @@ async def _close_stale(db: AsyncSession, ctx: UserContext, session: WorkoutSessi
         return False
     session.status = "finished"
     session.finished_at = sets[-1].logged_at
-    await repo.enqueue_job(db, ctx.user_id, INSIGHT_JOB, {"session_id": session.id})
+    await queue_insight(db, ctx, about=sets[-1].logged_at, run_after=now)
     await db.flush()
     return True
 
@@ -129,7 +130,7 @@ async def start_session(
         started_on = active.started_at.astimezone(ctx.tz).date()
         if started_on == today:
             return StartResult(_view(active, ctx, resolver), True, False, None)
-        if await _close_stale(db, ctx, active):
+        if await _close_stale(db, ctx, active, now):
             closed_on = started_on
 
     plan = await repo.get_active_plan(db, ctx.user_id)
@@ -337,7 +338,7 @@ async def end_session(
         (name, w) for ex_id, (name, w) in best.items() if ex_id in before and w > before[ex_id]
     )
     trained = {s.exercise_id for s in sets}
-    await repo.enqueue_job(db, ctx.user_id, INSIGHT_JOB, {"session_id": session.id})
+    await queue_insight(db, ctx, about=session.started_at, run_after=now)
     await db.flush()
     return EndResult(
         unit=ctx.unit,

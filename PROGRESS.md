@@ -2,8 +2,10 @@
 
 Status of the build against the implementation plan. Last updated 2026-10-12.
 
-**Summary:** Phases 0–4 of 11 are done on `feature/alexa-mcp-server` and verified end to
-end: all 152 tests pass against a real Postgres, and every tool call takes 6–36 ms.
+**Summary:** Phases 0–4 and 6 are done on `feature/alexa-mcp-server` and verified end to
+end: 193 tests pass against a real Postgres (plus one opt-in live LLM test), every tool
+call takes 6–37 ms, and AI coaching notes are generated in the background with Groq.
+Phase 5 (widget) is deferred.
 
 ## Phase status
 
@@ -14,8 +16,8 @@ end: all 152 tests pass against a real Postgres, and every tool call takes 6–3
 | 2 | Data layer | ✅ Done, verified against Postgres |
 | 3 | Catalog, presenters, MVP tools | ✅ Done, verified end to end |
 | 4 | Guided session | ✅ Done, verified end to end |
-| 5 | Widget (MCP Apps) | ⏳ Not started |
-| 6 | Background AI jobs | ⏳ Not started |
+| 5 | Widget (MCP Apps) | ⏸ Deferred: unclear whether Alexa+ renders MCP Apps |
+| 6 | Background AI jobs | ✅ Done, verified end to end (incl. live Groq) |
 | 7 | Stretch utilities | ⏳ Not started |
 | 8 | Demo client | ⏳ Not started |
 | 9 | Deployment and docs | ⏳ Not started |
@@ -126,6 +128,37 @@ end: all 152 tests pass against a real Postgres, and every tool call takes 6–3
   (one queued per user) for the Phase 6 worker.
 - `get_todays_workout` now includes a "Start workout" button.
 
+### Phase 6: Background AI jobs
+
+- **LLM clients** (`server/jobs/llm.py`): `LLMClient` interface; `GroqClient` (default,
+  `openai/gpt-oss-120b`, low reasoning effort) and `BedrockClient` (Converse API, Nova Lite,
+  run in a thread), both with timeouts and retries. Selected by `LLM_PROVIDER`.
+- **Queue** (`server/jobs/queue.py`): `LocalQueue` (default) and `SqsQueue`, selected by
+  `QUEUE_BACKEND`. The `jobs` table is the source of truth; messages only wake the worker.
+  Jobs are dispatched after the tool's transaction commits (`server/jobs/dispatch.py`).
+- **Worker** (`server/jobs/worker.py`): runs inside the server process (FastAPI lifespan).
+  Sweeps due jobs, claims each atomically, retries with backoff (30 s, 60 s), fails after
+  3 attempts. At startup it requeues jobs left running or queued. A missing Groq key
+  disables the worker with a warning instead of crashing.
+- **`regenerate_weekly_insight`** (`server/jobs/insights.py`):
+  - Computes the week's metrics in Python and sends only numbers, exercise names, the goal
+    and the unit (no name, id or other personal data).
+  - Validates the reply: 1–2 sentences, ≤ 240 characters, no markdown, no pain, injury or
+    diet mentions, must name an exercise or a number from the data. Normalizes for speech
+    ("175 lb" → "175 pounds", "175 lb bench press" → "175-pound bench press", "%" →
+    "percent", "PR" → "personal record"). One retry with the rejection reason.
+  - Stores the note in `insights`; `get_weekly_summary` then speaks it as "Coach's note".
+  - The LLM call runs outside any database transaction.
+- **Triggers:** `end_session` and closing a stale workout (immediately); `log_workout`
+  (debounced 10 minutes after the last log); `undo_last_log` (immediately, so a misheard
+  record doesn't stay in the note). Each job carries the `week_start` it's about.
+- **Concurrency:** one queued job per user and kind (partial unique index + atomic upsert);
+  requests reschedule it. Enqueueing while a job runs creates a new one.
+- **Weekly summary:** the current week now says "So far this week" with no volume
+  comparison (a partial week vs a full one was misleading); the model is told when the
+  week isn't over.
+- `personalize_plan` is deferred to Phase 7 (with `create_plan`).
+
 ## Decisions and deviations from the plan
 
 | Decision | Reason |
@@ -144,13 +177,19 @@ end: all 152 tests pass against a real Postgres, and every tool call takes 6–3
 | Workout stays open after the last set | Lets the user add a set before saying "end workout" |
 | `complete_set` speaks details only when they differ | It's heard after every set; "Set 2 of 4 done." is enough |
 | 8 s retry guard on `complete_set` | Voice requests get retried; a real set never follows the last one that fast |
+| Phase 5 (widget) deferred | Unknown whether Alexa+ supports MCP Apps widgets. Voice answers are complete without it; tools keep the placeholder `ui://` resource; the Phase 8 web client can render components itself |
+| Groq `openai/gpt-oss-120b` for insights | Better coaching quality; latency doesn't matter in the background (~0.7 s per call) |
+| Worker inside the server process | Matches the plan; jobs table makes it safe to add workers later |
+| Insight doesn't prescribe weights or reps | The progression rule and `get_todays_workout` own those; the note covers priorities, consistency and stalls |
+| `personalize_plan` deferred to Phase 7 | Its trigger (`create_plan`) is there, and changing a plan with an LLM needs strict validation |
 | Demo user has fixed id 1 | Keeps `get_current_user()` free of DB lookups until OAuth |
 | No tool `outputSchema` | The full catalog schema is large; tools validate against it before sending instead |
 
 ## Tests
 
-152 tests, **all passing** against Postgres 16 (2026-10-12). Without a reachable database
-the DB tests skip, which is not full verification.
+193 tests, **all passing** against Postgres 16 (2026-10-12), plus one opt-in live test
+against Groq (`FITGEN_LIVE_LLM=1 uv run pytest tests/test_llm_live.py -s`), which also
+passes. Without a reachable database the DB tests skip, which is not full verification.
 
 Measured tool latency (server timing log, local Postgres): `get_todays_workout` 32 ms,
 `log_workout` 25 ms, `get_weekly_summary` 14 ms, `log_body_metric` 8 ms,
@@ -172,6 +211,11 @@ Measured tool latency (server timing log, local Postgres): `get_todays_workout` 
 | Session position state machine | `tests/test_session_state.py` | No |
 | Session presenters (spoken text + components) | `tests/test_session_presenters.py` | No |
 | Guided session end to end: walk-through, skip, resume, undo, retries, stale, latency | `tests/test_sessions_db.py` | **Yes** |
+| Insight prompt, validation, normalization, privacy | `tests/test_insight_validation.py` | No |
+| Groq/Bedrock clients, local/SQS queues (mocked transports) | `tests/test_llm_and_queue.py` | No |
+| Worker: success, retries, debounce, concurrency, week targeting, recovery | `tests/test_worker_db.py` | **Yes** |
+| end_session → worker → spoken coaching note | `tests/test_jobs_flow_db.py` | **Yes** |
+| Real Groq call (opt-in) | `tests/test_llm_live.py` | No (network) |
 
 ## How to run
 
@@ -195,14 +239,18 @@ After any model change, rerun `uv run python -m server.db.seed --reset` (wipes a
    ext-apps spec in Phase 5.
 2. **Deployment note for Phase 9.** The SDK's DNS-rebinding protection defaults to
    localhost hosts; allowed hosts must be configured behind the ALB.
+3. **Rotate exposed API keys.** The Groq key (and an OpenRouter key, unused) were pasted in
+   chat. Rotate them after the hackathon; keep keys only in `.env`.
 
-## Next up: Phase 5, widget (MCP Apps)
+## Next up: Phase 7, stretch utilities
 
-React + Vite single-file widget using `@modelcontextprotocol/ext-apps` for the host
-bridge, rendering the catalog components (including `session_card`, `timer` and the
-control buttons, which call tools), light/dark theme from hostContext, served as a hashed
-`ui://fitgen/widget-<hash>.html` resource. Resolve open item 1 (MCP Apps capability on
-2025-11-25) first.
+In order: `plate_calculator`, `get_form_cues`, `readiness_check` (deterministic; any
+mention of pain → stop that exercise and see a professional, no diagnosis),
+`set_preferences` (also first-run setup), `calculate_macros`, `create_plan` (instant
+template + background `personalize_plan`), `adjust_plan`.
+
+Phase 5 (widget) is deferred. Revisit it if Alexa+ turns out to render MCP Apps; open item
+1 belongs to it.
 
 ## Claude Code agents and skills
 

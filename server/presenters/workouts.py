@@ -250,7 +250,8 @@ def _week_label(s: WeeklySummary) -> str:
 
 def present_weekly_summary(s: WeeklySummary) -> Presentation:
     label = _week_label(s)
-    change = percent_change(s.volume_kg, s.prev_volume_kg)
+    # The current week isn't over, so comparing it with a full week would mislead.
+    change = percent_change(s.volume_kg, s.prev_volume_kg) if s.weeks_ago > 0 else None
 
     if s.sessions == 0:
         lead = f"{label} you haven't logged any training."
@@ -261,7 +262,8 @@ def present_weekly_summary(s: WeeklySummary) -> Presentation:
         days = (
             f"{s.sessions} of {s.planned} planned days" if s.planned else plural(s.sessions, "day")
         )
-        text = f"{label} you trained {days} and lifted {say_volume(s.volume_kg, s.unit)}"
+        lead = "So far this week" if s.weeks_ago == 0 else label
+        text = f"{lead} you trained {days} and lifted {say_volume(s.volume_kg, s.unit)}"
         if change is not None and change != 0:
             text += f", {'up' if change > 0 else 'down'} {abs(change)} percent from the week before"
         text += "."

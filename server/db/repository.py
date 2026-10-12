@@ -5,7 +5,8 @@ from `get_current_user()`, never from tool input.
 from datetime import date, datetime
 from decimal import Decimal
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -315,16 +316,105 @@ async def get_insight(db: AsyncSession, user_id: int, week_start: date) -> Insig
 
 # --- Jobs --------------------------------------------------------------------------------
 
+# Job ids queued in a transaction, dispatched to the queue after it commits (see run_tool).
+ENQUEUED_JOBS = "enqueued_job_ids"
+
 
 async def enqueue_job(
-    db: AsyncSession, user_id: int, kind: str, payload: dict | None = None
-) -> bool:
-    """Queue a background job unless the same kind is already queued for the user."""
-    already = await db.scalar(
-        select(Job.id).where(Job.user_id == user_id, Job.kind == kind, Job.status == "queued")
+    db: AsyncSession,
+    user_id: int,
+    kind: str,
+    payload: dict | None = None,
+    *,
+    run_after: datetime,
+) -> int:
+    """Queue a background job, or reschedule the user's queued job of this kind (debounce).
+
+    One atomic upsert on the partial unique index, so it's safe against concurrent requests
+    and against the worker claiming the job at the same moment: once claimed, the job is no
+    longer "queued" and a fresh one is inserted.
+    """
+    stmt = pg_insert(Job).values(
+        user_id=user_id,
+        kind=kind,
+        status="queued",
+        attempts=0,
+        payload=payload or {},
+        run_after=run_after,
     )
-    if already is not None:
+    stmt = stmt.on_conflict_do_update(
+        index_elements=[Job.user_id, Job.kind],
+        # A literal (not a bound parameter) so Postgres can match the partial index predicate.
+        index_where=text("status = 'queued'"),
+        set_={"run_after": stmt.excluded.run_after, "payload": stmt.excluded.payload},
+    ).returning(Job.id)
+    job_id = await db.scalar(stmt)
+    db.info.setdefault(ENQUEUED_JOBS, []).append(job_id)
+    return job_id
+
+
+async def claim_job(db: AsyncSession, job_id: int, now: datetime) -> Job | None:
+    """Atomically mark a due, queued job as running. None if gone, not due or taken."""
+    claimed = await db.scalar(
+        update(Job)
+        .where(Job.id == job_id, Job.status == "queued", Job.run_after <= now)
+        .values(status="running", attempts=Job.attempts + 1, updated_at=now)
+        .returning(Job.id)
+    )
+    return await db.get(Job, claimed) if claimed is not None else None
+
+
+async def due_job_ids(db: AsyncSession, now: datetime, *, limit: int = 20) -> list[int]:
+    return list(
+        await db.scalars(
+            select(Job.id)
+            .where(Job.status == "queued", Job.run_after <= now)
+            .order_by(Job.run_after)
+            .limit(limit)
+        )
+    )
+
+
+async def requeue_job(db: AsyncSession, job_id: int, run_after: datetime, error: str) -> bool:
+    """Put a failed attempt back in the queue. False if a newer queued job of the same kind
+    already exists for the user (that one will cover it), in which case this one is failed."""
+    job = await db.get(Job, job_id)
+    newer = await db.scalar(
+        select(Job.id).where(
+            Job.user_id == job.user_id, Job.kind == job.kind, Job.status == "queued"
+        )
+    )
+    job.error = error
+    if newer is not None:
+        job.status = "failed"
+        job.error = f"{error} (superseded by job {newer})"
         return False
-    db.add(Job(user_id=user_id, kind=kind, status="queued", payload=payload or {}))
-    await db.flush()
+    job.status, job.run_after = "queued", run_after
     return True
+
+
+async def requeue_stale_running(db: AsyncSession, before: datetime) -> int:
+    """Jobs stuck in "running" since before `before` (worker died mid-job) go back to queued,
+    unless a newer queued job of the same kind supersedes them."""
+    stale = list(
+        await db.scalars(select(Job).where(Job.status == "running", Job.updated_at < before))
+    )
+    for job in stale:
+        await requeue_job(db, job.id, job.run_after, "worker stopped while running")
+        await db.flush()
+    return len(stale)
+
+
+async def queued_job_ids(db: AsyncSession) -> list[int]:
+    return list(await db.scalars(select(Job.id).where(Job.status == "queued")))
+
+
+async def upsert_insight(
+    db: AsyncSession, user_id: int, week_start: date, text: str, model_id: str
+) -> None:
+    insight = await get_insight(db, user_id, week_start)
+    if insight is None:
+        db.add(Insight(user_id=user_id, week_start=week_start, text=text, model_id=model_id))
+    else:
+        insight.text, insight.model_id = text, model_id
+    await db.flush()

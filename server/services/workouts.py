@@ -12,6 +12,7 @@ from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from server.config import get_settings
 from server.db import repository as repo
 from server.db.models import Plan, PlanDay
 from server.services.context import UserContext, UserFacingError
@@ -22,6 +23,7 @@ from server.services.records import PRKind, detect_pr, estimated_1rm
 from server.services.units import Unit, to_kg
 
 DEDUPE_WINDOW = timedelta(seconds=60)
+INSIGHT_JOB = "regenerate_weekly_insight"
 HISTORY_FOR_SUGGESTIONS = timedelta(days=60)
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 
@@ -39,6 +41,20 @@ def resolve_exercise(resolver: ExerciseResolver, name: str) -> ExerciseEntry:
             r.suggestions,
         )
     raise UserFacingError(f"I couldn't find an exercise called {name}.")
+
+
+def week_start_of(moment: datetime, ctx: UserContext) -> date:
+    """Monday of the user's local week containing `moment`."""
+    day = moment.astimezone(ctx.tz).date()
+    return day - timedelta(days=day.weekday())
+
+
+async def queue_insight(
+    db: AsyncSession, ctx: UserContext, *, about: datetime, run_after: datetime
+) -> None:
+    """Refresh the weekly insight for the week containing `about` (after `run_after`)."""
+    payload = {"week_start": week_start_of(about, ctx).isoformat()}
+    await repo.enqueue_job(db, ctx.user_id, INSIGHT_JOB, payload, run_after=run_after)
 
 
 def _local_day_start(day: date, ctx: UserContext) -> datetime:
@@ -101,6 +117,9 @@ async def log_workout(
     )
     active = await repo.get_active_session(db, ctx.user_id)
     batch_id = str(uuid.uuid4())
+    # Refresh the weekly insight once the user stops logging for a while.
+    debounce = timedelta(minutes=get_settings().insight_debounce_minutes)
+    await queue_insight(db, ctx, about=now, run_after=now + debounce)
     for i in range(sets):
         await repo.add_logged_set(
             db,
@@ -128,11 +147,13 @@ class UndoResult:
     rewound_session: bool = False  # the guided session's position stepped back too
 
 
-async def undo_last_log(db: AsyncSession, ctx: UserContext) -> UndoResult | None:
+async def undo_last_log(db: AsyncSession, ctx: UserContext, *, now: datetime) -> UndoResult | None:
     batch = await repo.get_last_batch(db, ctx.user_id)
     if not batch:
         return None
     await repo.delete_batch(db, ctx.user_id, batch[0].batch_id)
+    # A stored insight may mention the removed sets (e.g. a misheard record): refresh it.
+    await queue_insight(db, ctx, about=batch[0].logged_at, run_after=now)
     rewound = await _rewind_session_for_undo(db, ctx, batch)
     return UndoResult(
         exercise=batch[0].exercise.name,
@@ -351,7 +372,8 @@ async def get_weekly_summary(
             sessions=sessions,
             planned=ctx.days_per_week,
             volume_kg=volume,
-            prev_volume_kg=prev_volume,
+            # No volume comparison while the current week is still in progress.
+            prev_volume_kg=prev_volume if weeks_ago > 0 else Decimal("0"),
         )
     )
     return WeeklySummary(
