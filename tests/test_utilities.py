@@ -158,6 +158,7 @@ def test_readiness_speech():
     assert pain.startswith(f"Thanks for telling me. {PAIN_ADVICE}")
     assert "stop that exercise and see a doctor or physical therapist" in pain
     assert "train as planned" not in pain.lower() and "diagnos" not in pain.lower()
+    assert pain.endswith("For everything else today, I've taken 10 percent off your weights.")
     in_session = check(
         present_readiness(Assessment("light", ("short sleep",), session_adjusted=True))
     )

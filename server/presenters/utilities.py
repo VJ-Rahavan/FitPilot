@@ -25,6 +25,13 @@ PAIN_ADVICE = (
 )
 _ORDINALS = ("First", "Second", "Third", "Fourth", "Fifth")
 # After the readiness lead-in, so the rest level doesn't repeat "rest day".
+# After the pain advice: what changes for the rest of today.
+_PAIN_CHANGE = {
+    "full": "Train as planned on anything that doesn't hurt.",
+    "reduce": "For everything else today, I've taken 10 percent off your weights.",
+    "light": "For everything else today, I've taken 20 percent off your weights and dropped a set.",
+    "rest": "Today is a good day to rest. If you train anyway, I've taken 20 percent off.",
+}
 _READINESS_CHANGE = {
     "full": "Train as planned on anything that doesn't hurt.",
     "reduce": "I've taken 10 percent off today's weights.",
@@ -132,8 +139,7 @@ def present_form_cues(entry: ExerciseEntry) -> Presentation:
 def present_readiness(a: Assessment) -> Presentation:
     if a.pain_reported:
         # Safety first; the lighter day follows.
-        text = f"Thanks for telling me. {PAIN_ADVICE} For the rest of your training today, "
-        text += _READINESS_CHANGE[a.level][0].lower() + _READINESS_CHANGE[a.level][1:]
+        text = f"Thanks for telling me. {PAIN_ADVICE} {_PAIN_CHANGE[a.level]}"
     elif a.level == "full":
         text = "You sound ready. Train as planned today."
         if a.reasons and a.energy_high:

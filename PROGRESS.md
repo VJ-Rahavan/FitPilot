@@ -2,10 +2,10 @@
 
 Status of the build against the implementation plan. Last updated 2026-10-12.
 
-**Summary:** Phases 0–4 and 6 are done on `feature/alexa-mcp-server` and verified end to
-end: 193 tests pass against a real Postgres (plus one opt-in live LLM test), every tool
-call takes 6–37 ms, and AI coaching notes are generated in the background with Groq.
-Phase 5 (widget) is deferred.
+**Summary:** Phases 0–4, 6 and 7a are done on `feature/alexa-mcp-server` and verified end
+to end: 247 tests pass against a real Postgres (plus one opt-in live LLM test), all 15
+tools respond in 3–38 ms, and AI coaching notes are generated in the background with
+Groq. Phase 5 (widget) is deferred; 7b (plan tools) is next.
 
 ## Phase status
 
@@ -18,7 +18,8 @@ Phase 5 (widget) is deferred.
 | 4 | Guided session | ✅ Done, verified end to end |
 | 5 | Widget (MCP Apps) | ⏸ Deferred: unclear whether Alexa+ renders MCP Apps |
 | 6 | Background AI jobs | ✅ Done, verified end to end (incl. live Groq) |
-| 7 | Stretch utilities | ⏳ Not started |
+| 7a | Utility tools (plates, form cues, readiness, preferences, macros) | ✅ Done, verified end to end |
+| 7b | Plan tools (create_plan, personalize_plan, adjust_plan) | ⏳ Not started |
 | 8 | Demo client | ⏳ Not started |
 | 9 | Deployment and docs | ⏳ Not started |
 | 10 | OAuth (only if Alexa requires it) | ⏸ Needs go-ahead |
@@ -159,6 +160,35 @@ Phase 5 (widget) is deferred.
   week isn't over.
 - `personalize_plan` is deferred to Phase 7 (with `create_plan`).
 
+### Phase 7a: Utility tools
+
+| Tool | Inputs | Example answer |
+|---|---|---|
+| `plate_calculator` | weight, unit? | "For 225 pounds, put two 45s on each side of the 45-pound bar." |
+| `get_form_cues` | exercise | "Three cues for deadlift. First, bar over mid foot before you pull. Second, …" |
+| `readiness_check` | sleep_hours?, soreness?, energy?, pain_mentioned?, notes? | "With very little sleep, let's keep today light. I've taken 20 percent off today's weights and dropped a set." |
+| `set_preferences` | unit?, bar_weight?, goal?, days_per_week?, timezone? | "Done. I'll use kilograms, focus on building muscle and plan for 3 days a week." |
+| `calculate_macros` | bodyweight?, unit? | "For strength at 80 kilograms, aim for about 2,750 calories a day. That's roughly 145 grams of protein, …" |
+
+- **Plates:** greedy per side (US 45/35/25/10/5/2.5 lb, kg 25/20/15/10/5/2.5/1.25); bar from
+  the profile, or its counterpart in the other unit (45 lb ↔ 20 kg, 35 lb ↔ 15 kg); handles
+  below-the-bar, empty-bar and non-loadable requests ("closest is 185"). Returns
+  `plate_diagram`.
+- **Readiness:** deterministic points → full, reduce (−10%), light (−20%, one set fewer) or
+  rest. Stored per day in a new `readiness_checks` table (level and pain flag only; notes
+  are never stored) and applied to `get_todays_workout` and `start_session`; a check during
+  an active workout lightens the remaining exercises. Lightened days are excluded from
+  progression history, and barbell targets never drop below the empty bar.
+- **Pain safety:** a broad pain regex or the `pain_mentioned` flag always leads with "If
+  something hurts, stop that exercise and see a doctor or physical therapist before doing
+  it again." Never "train as planned", never a diagnosis.
+- **Preferences:** partial updates; creates the profile on first run (asks for units, goal
+  and days with an example when nothing is given). Goals accept phrases ("build muscle",
+  "lose weight"). Time zones accept cities, US zones and IANA names, stored in canonical
+  form (`tzdata` bundled, so it works on Linux).
+- **Macros:** bodyweight-based estimate (about 33 kcal/kg × goal factor; protein 1.6–2.2 g/kg;
+  fat 0.9 g/kg; carbs the rest), using the latest weigh-in when no weight is given.
+
 ## Decisions and deviations from the plan
 
 | Decision | Reason |
@@ -182,12 +212,15 @@ Phase 5 (widget) is deferred.
 | Worker inside the server process | Matches the plan; jobs table makes it safe to add workers later |
 | Insight doesn't prescribe weights or reps | The progression rule and `get_todays_workout` own those; the note covers priorities, consistency and stalls |
 | `personalize_plan` deferred to Phase 7 | Its trigger (`create_plan`) is there, and changing a plan with an LLM needs strict validation |
+| Readiness changes today's targets | "Go lighter" should change the numbers; stored per day, excluded from progression |
+| Macros from bodyweight and goal only | Avoids collecting height, age and sex; clearly labelled as an estimate |
+| Plan split into 7a and 7b | The plan-changing tools (with an LLM) need their own design and review |
 | Demo user has fixed id 1 | Keeps `get_current_user()` free of DB lookups until OAuth |
 | No tool `outputSchema` | The full catalog schema is large; tools validate against it before sending instead |
 
 ## Tests
 
-193 tests, **all passing** against Postgres 16 (2026-10-12), plus one opt-in live test
+247 tests, **all passing** against Postgres 16 (2026-10-14), plus one opt-in live test
 against Groq (`FITGEN_LIVE_LLM=1 uv run pytest tests/test_llm_live.py -s`), which also
 passes. Without a reachable database the DB tests skip, which is not full verification.
 
@@ -216,6 +249,8 @@ Measured tool latency (server timing log, local Postgres): `get_todays_workout` 
 | Worker: success, retries, debounce, concurrency, week targeting, recovery | `tests/test_worker_db.py` | **Yes** |
 | end_session → worker → spoken coaching note | `tests/test_jobs_flow_db.py` | **Yes** |
 | Real Groq call (opt-in) | `tests/test_llm_live.py` | No (network) |
+| Plates, readiness rules, pain detection, macros, preferences, spoken text | `tests/test_utilities.py` | No |
+| Utility tools end to end, readiness vs progression and active workouts, latency | `tests/test_utilities_db.py` | **Yes** |
 
 ## How to run
 
@@ -242,12 +277,13 @@ After any model change, rerun `uv run python -m server.db.seed --reset` (wipes a
 3. **Rotate exposed API keys.** The Groq key (and an OpenRouter key, unused) were pasted in
    chat. Rotate them after the hackathon; keep keys only in `.env`.
 
-## Next up: Phase 7, stretch utilities
+## Next up: Phase 7b (plan tools) or Phase 8 (demo client)
 
-In order: `plate_calculator`, `get_form_cues`, `readiness_check` (deterministic; any
-mention of pain → stop that exercise and see a professional, no diagnosis),
-`set_preferences` (also first-run setup), `calculate_macros`, `create_plan` (instant
-template + background `personalize_plan`), `adjust_plan`.
+- **7b:** `create_plan` (instant template from goal and days per week, then a background
+  `personalize_plan` job with strict validation) and `adjust_plan` ("swap squats for leg
+  press", "make it 3 days").
+- **Phase 8:** the demo web client (mic button, spoken replies, components rendered from
+  tool results), the only way to demo FitGen without MCP Inspector.
 
 Phase 5 (widget) is deferred. Revisit it if Alexa+ turns out to render MCP Apps; open item
 1 belongs to it.
