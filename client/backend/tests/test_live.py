@@ -22,7 +22,7 @@ pytestmark = pytest.mark.skipif(
 CONVERSATION = [
     ("What plates do I need for 225 pounds?", "plate_calculator", {"weight": 225}),
     ("Start my workout", "start_session", {}),
-    ("Done", "complete_set", {}),
+    ("Done, that felt easy", "complete_set", {"effort": "easy"}),
     ("Only got 4 on that one", "complete_set", {"reps": 4}),
     ("I'm finished for today", "end_session", {}),
 ]

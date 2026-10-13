@@ -255,6 +255,7 @@ class SessionCardComponent(_Model):
     unit: Literal["lb", "kg"] = "lb"
     next_up: str | None = Field(None, description="What comes after this set")
     form_cue: str | None = None
+    last_time: str | None = Field(None, description="This set last session, e.g. '215 lb × 5'")
 
 
 class PlateDiagramComponent(_Model):

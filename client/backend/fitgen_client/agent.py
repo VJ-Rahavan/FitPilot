@@ -19,6 +19,9 @@ Choosing the tool:
 - "start my workout" means start_session.
 - "done", "finished that set" or "next" means complete_set with no arguments.
 - "only got 6" means complete_set with reps 6. "did 190" means complete_set with weight 190.
+- If they say how the set felt while logging it, pass effort: easy ("easy", "too light"), \
+ok ("felt good", "solid"), hard ("tough", "rough"), failed ("brutal", "barely", "couldn't \
+finish"). If they only describe a set they already logged, don't log another set.
 - "skip this" means skip_exercise. "I'm done" or "finish my workout" means end_session.
 - "undo" or "that was wrong" means undo_last_log.
 - If the user mentions pain, injury or something hurting, call readiness_check with \

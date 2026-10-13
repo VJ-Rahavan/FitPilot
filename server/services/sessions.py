@@ -5,8 +5,8 @@ The server owns the position (no IDs from the client). Targets are snapshotted i
 """
 
 import uuid
-from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from dataclasses import dataclass, replace
+from datetime import date, datetime, time, timedelta
 from decimal import Decimal
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,6 +14,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from server.db import repository as repo
 from server.db.models import SessionExercise, WorkoutSession
 from server.services.context import UserContext, UserFacingError
+from server.services.effort import (
+    Adjustment,
+    Beat,
+    Effort,
+    adjust_remaining,
+    beat_last_time,
+    effective_effort,
+)
 from server.services.exercise_resolver import ExerciseEntry, ExerciseResolver
 from server.services.records import PRKind, detect_pr
 from server.services.session_state import Position, after_set, after_skip
@@ -55,6 +63,8 @@ class SessionView:
     unit: Unit
     items: tuple[SessionItem, ...]
     position: Position
+    # The same set in the previous session of the current exercise: (reps, weight_kg).
+    last_time: tuple[int, Decimal] | None = None
 
     @property
     def finished(self) -> bool:
@@ -93,6 +103,47 @@ async def _require_active(db: AsyncSession, ctx: UserContext) -> WorkoutSession:
     return session
 
 
+LAST_TIME_LOOKBACK = timedelta(days=60)
+
+
+async def _previous_session_sets(
+    db: AsyncSession, ctx: UserContext, exercise_id: int, today: date
+) -> list[tuple[int, Decimal]]:
+    """Sets (reps, weight_kg) of this exercise's most recent earlier session, in order.
+
+    Days lightened by a readiness check are skipped: they aren't a fair comparison.
+    """
+    since = datetime.combine(today, time.min, tzinfo=ctx.tz) - LAST_TIME_LOOKBACK
+    sets = await repo.get_sets_for_exercise(db, ctx.user_id, exercise_id, since=since)
+    lightened = await repo.get_lightened_dates(db, ctx.user_id, since.date())
+    by_day: dict[date, list[tuple[int, Decimal]]] = {}
+    for s in sets:
+        day = s.logged_at.astimezone(ctx.tz).date()
+        if day < today and day not in lightened:
+            by_day.setdefault(day, []).append((s.reps, s.weight_kg))
+    return by_day[max(by_day)] if by_day else []
+
+
+async def _with_last_time(
+    db: AsyncSession,
+    ctx: UserContext,
+    view: SessionView,
+    today: date,
+    known: tuple[int, list[tuple[int, Decimal]]] | None = None,
+) -> SessionView:
+    """`known`: (exercise id, its previous-session sets), to skip the query when unchanged."""
+    item = view.current
+    if item is None:
+        return view
+    if known is not None and known[0] == item.exercise.id:
+        previous = known[1]
+    else:
+        previous = await _previous_session_sets(db, ctx, item.exercise.id, today)
+    index = view.position.sets_done
+    last = previous[index] if index < len(previous) else None
+    return replace(view, last_time=last)
+
+
 # --- start_session ------------------------------------------------------------------------
 
 
@@ -129,7 +180,8 @@ async def start_session(
     if active is not None:
         started_on = active.started_at.astimezone(ctx.tz).date()
         if started_on == today:
-            return StartResult(_view(active, ctx, resolver), True, False, None)
+            view = await _with_last_time(db, ctx, _view(active, ctx, resolver), today)
+            return StartResult(view, True, False, None)
         if await _close_stale(db, ctx, active, now):
             closed_on = started_on
 
@@ -165,7 +217,8 @@ async def start_session(
     session.plan_day = day
     db.add(session)
     await db.flush()
-    return StartResult(_view(session, ctx, resolver), False, rest_day, closed_on)
+    view = await _with_last_time(db, ctx, _view(session, ctx, resolver), today)
+    return StartResult(view, False, rest_day, closed_on)
 
 
 # --- complete_set -------------------------------------------------------------------------
@@ -184,6 +237,9 @@ class CompleteResult:
     exercise_finished: bool
     view: SessionView  # after advancing (unchanged for a duplicate)
     duplicate: bool = False  # a retried request; nothing new was logged
+    effort: Effort | None = None  # as said, or "failed" when 2+ reps short
+    adjustment: Adjustment | None = None  # new target for the rest of this exercise
+    beat: Beat | None = None  # this set vs the same set last session
 
 
 async def complete_set(
@@ -195,6 +251,7 @@ async def complete_set(
     weight: float | None,
     unit: Unit,
     now: datetime,
+    effort: Effort | None = None,
 ) -> CompleteResult:
     session = await _require_active(db, ctx)
     view = _view(session, ctx, resolver)
@@ -207,6 +264,9 @@ async def complete_set(
         and (reps is None or reps == last.reps)
         and (weight is None or to_kg(weight, unit) == last.weight_kg)
     ):
+        if effort and last.effort is None:
+            last.effort = effort  # effort said with a retried request: keep it, no adjustment
+            await db.flush()
         entry = resolver.get(last.exercise_id)
         return CompleteResult(
             entry, 0, 0, last.reps, last.reps, last.weight_kg, None, None, False, view, True
@@ -230,6 +290,21 @@ async def complete_set(
         row.target_weight_kg = weight_kg  # a changed weight carries to the remaining sets
     done_reps = reps if reps is not None else item.reps
 
+    effort = effective_effort(effort, done_reps, item.reps)
+    today = now.astimezone(ctx.tz).date()
+    previous = await _previous_session_sets(db, ctx, item.exercise.id, today)
+    set_index = view.position.sets_done
+    beat = None
+    if set_index < len(previous):
+        last_reps, last_weight = previous[set_index]
+        beat = beat_last_time(
+            reps=done_reps,
+            weight_kg=weight_kg,
+            last_reps=last_reps,
+            last_weight_kg=last_weight,
+            bodyweight=item.bodyweight,
+        )
+
     prev_max_weight, prev_max_reps = await repo.get_pr_baseline(
         db, ctx.user_id, item.exercise.id, weight_kg
     )
@@ -250,13 +325,30 @@ async def complete_set(
         batch_id=str(uuid.uuid4()),
         session_id=session.id,
         session_exercise_id=row.id,
+        effort=effort,
     )
 
     set_number = view.position.sets_done + 1
     new_pos = after_set(view.position, [i.sets for i in view.items])
     exercise_finished = new_pos.exercise != view.position.exercise
+    adjustment = None
     if exercise_finished:
         row.status = "done"
+    else:
+        adjustment = adjust_remaining(
+            effort=effort,
+            reps=done_reps,
+            target_reps=item.reps,
+            weight_kg=weight_kg,
+            equipment=item.exercise.equipment,
+            unit=ctx.unit,
+            bar_kg=ctx.bar_weight_kg,
+            easy_steps_used=row.easy_steps,
+        )
+        if adjustment is not None:
+            row.target_weight_kg = adjustment.weight_kg
+            if adjustment.action == "up":
+                row.easy_steps += 1
     _set_position(session, new_pos)
     await db.flush()
     return CompleteResult(
@@ -269,7 +361,12 @@ async def complete_set(
         target_weight_kg=target_before,
         pr=pr,
         exercise_finished=exercise_finished,
-        view=_view(session, ctx, resolver),
+        view=await _with_last_time(
+            db, ctx, _view(session, ctx, resolver), today, known=(item.exercise.id, previous)
+        ),
+        effort=effort,
+        adjustment=adjustment,
+        beat=beat,
     )
 
 
@@ -284,7 +381,7 @@ class SkipResult:
 
 
 async def skip_exercise(
-    db: AsyncSession, ctx: UserContext, resolver: ExerciseResolver
+    db: AsyncSession, ctx: UserContext, resolver: ExerciseResolver, *, now: datetime
 ) -> SkipResult:
     session = await _require_active(db, ctx)
     view = _view(session, ctx, resolver)
@@ -297,7 +394,9 @@ async def skip_exercise(
     row.status = "done" if partial else "skipped"
     _set_position(session, after_skip(view.position))
     await db.flush()
-    return SkipResult(item.exercise, _view(session, ctx, resolver), partial)
+    today = now.astimezone(ctx.tz).date()
+    view = await _with_last_time(db, ctx, _view(session, ctx, resolver), today)
+    return SkipResult(item.exercise, view, partial)
 
 
 # --- end_session --------------------------------------------------------------------------

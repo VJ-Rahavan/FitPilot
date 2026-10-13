@@ -204,6 +204,8 @@ class SessionExercise(Base):
     # None until known (no history yet); 0 for bodyweight. Updated if the user changes weight.
     target_weight_kg: Mapped[Decimal | None] = mapped_column(KG)
     status: Mapped[str] = mapped_column(String(10), default="pending")
+    # Weight steps added this workout after "that felt easy" (capped).
+    easy_steps: Mapped[int] = mapped_column(Integer, default=0)
 
     session: Mapped[WorkoutSession] = relationship(back_populates="exercises")
     exercise: Mapped[Exercise] = relationship()
@@ -214,6 +216,10 @@ class LoggedSet(Base):
     __table_args__ = (
         Index("ix_logged_sets_user_exercise_time", "user_id", "exercise_id", "logged_at"),
         Index("ix_logged_sets_user_time", "user_id", "logged_at"),
+        CheckConstraint(
+            "effort IS NULL OR effort IN ('easy', 'ok', 'hard', 'failed')",
+            name="ck_logged_set_effort",
+        ),
     )
 
     id: Mapped[int] = mapped_column(primary_key=True)
@@ -231,6 +237,8 @@ class LoggedSet(Base):
     reps: Mapped[int] = mapped_column(Integer)
     weight_kg: Mapped[Decimal] = mapped_column(KG)
     logged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # How the set felt, when the user said so: easy | ok | hard | failed.
+    effort: Mapped[str | None] = mapped_column(String(10))
 
     exercise: Mapped[Exercise] = relationship()
 

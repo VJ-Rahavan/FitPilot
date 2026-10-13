@@ -1,10 +1,14 @@
 """Spoken text and components for the guided session tools (no DB)."""
 
+from dataclasses import replace
 from datetime import date, timedelta
 from decimal import Decimal
 
+import pytest
+
 from server.catalog.validation import validate_components
 from server.presenters.sessions import present_complete, present_end, present_skip, present_start
+from server.services.effort import Adjustment, Beat
 from server.services.exercise_resolver import ExerciseEntry
 from server.services.session_state import Position
 from server.services.sessions import (
@@ -94,9 +98,9 @@ def test_complete_on_target_is_short():
     assert p.components[1]["seconds"] == 120
 
 
-def test_complete_short_with_pr():
+def test_complete_short_set_is_not_called_a_record():
     p = present_complete(_complete(2, 4, Position(0, 2), pr="weight"))
-    assert check(p) == "Set 2 of 4 done: 4 reps. New personal record on bench press!"
+    assert check(p) == "Set 2 of 4 done: 4 reps."
 
 
 def test_complete_changed_weight():
@@ -193,3 +197,69 @@ def test_end_long_and_cancelled():
     assert "in 1 hour 5 minutes" in check(present_end(r), "full")
     cancelled = present_end(EndResult("lb", "Lower B", cancelled=True))
     assert check(cancelled, "full") == "You hadn't logged any sets, so I cancelled the workout."
+
+
+# --- effort and "beat last time" ------------------------------------------------------------
+
+
+def _effort(adjustment=None, beat=None, effort=None, pr=None, finished=False, after=None):
+    base = _complete(1, 6, after or Position(0, 1), pr=pr, finished=finished)
+    return replace(base, adjustment=adjustment, beat=beat, effort=effort)
+
+
+def test_easy_raises_next_set():
+    r = _effort(Adjustment("up", lb(225)), effort="easy")
+    assert check(present_complete(r)) == (
+        "Set 1 of 4 done. That felt easy, so your next set is 225 pounds."
+    )
+
+
+@pytest.mark.parametrize(
+    ("action", "weight", "spoken"),
+    [
+        ("capped", 230, "That felt easy. Let's stay at 230 pounds for now."),
+        ("hold", 220, "Tough one, so let's hold 220 pounds."),
+        ("down", 210, "That one was tough, so let's drop your next set to 210 pounds."),
+    ],
+)
+def test_other_adjustments(action, weight, spoken):
+    r = _effort(Adjustment(action, lb(weight)), effort="hard")
+    assert check(present_complete(r)) == f"Set 1 of 4 done. {spoken}"
+
+
+def test_beat_last_time_spoken_and_record_wins():
+    reps = _effort(beat=Beat("reps", 2))
+    assert check(present_complete(reps)) == "Set 1 of 4 done. That beats last time by 2 reps."
+    heavier = _effort(beat=Beat("weight", lb(5)))
+    assert check(present_complete(heavier)) == (
+        "Set 1 of 4 done. That's 5 pounds more than last time."
+    )
+    with_pr = _effort(beat=Beat("weight", lb(5)), pr="weight")
+    assert "than last time" not in check(present_complete(with_pr))
+
+
+def test_short_set_is_not_celebrated():
+    short = replace(
+        _complete(2, 4, Position(0, 2), pr="weight"),
+        effort="failed",
+        adjustment=Adjustment("down", lb(215)),
+        beat=Beat("weight", lb(5)),
+    )
+    assert check(present_complete(short)) == (
+        "Set 2 of 4 done: 4 reps. That one was tough, so let's drop your next set to 215 pounds."
+    )
+
+
+def test_effort_on_last_set_adds_nothing():
+    r = _effort(effort="hard", finished=True, after=Position(1, 0))
+    assert check(present_complete(r)) == (
+        "Set 1 of 4 done. That's bench press done. Next up: barbell row, 4 sets of 8 at 145 pounds."
+    )
+
+
+def test_session_card_shows_last_time():
+    p = present_start(
+        StartResult(replace(view(Position(0, 0)), last_time=(5, lb(215))), False, False, None)
+    )
+    card = next(c for c in p.components if c["type"] == "session_card")
+    assert card["last_time"] == "215 lb × 5"

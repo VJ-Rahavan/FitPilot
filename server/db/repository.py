@@ -190,9 +190,11 @@ async def add_logged_set(
     batch_id: str,
     session_id: int | None = None,
     session_exercise_id: int | None = None,
+    effort: str | None = None,
 ) -> LoggedSet:
     row = LoggedSet(
         user_id=user_id,
+        effort=effort,
         batch_id=batch_id,
         session_exercise_id=session_exercise_id,
         exercise_id=exercise_id,

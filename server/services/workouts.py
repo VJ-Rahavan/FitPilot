@@ -19,6 +19,7 @@ from server.services.context import UserContext, UserFacingError
 from server.services.exercise_resolver import ExerciseEntry, ExerciseResolver
 from server.services.insights import fallback_insight
 from server.services.progression import (
+    Row,
     Suggestion,
     group_sessions,
     suggest,
@@ -186,6 +187,13 @@ async def _rewind_session_for_undo(db: AsyncSession, ctx: UserContext, batch) ->
     remaining = await repo.count_sets_for_session_exercise(db, ctx.user_id, row_id)
     session.current_position, session.current_set = row.position, remaining
     row.status = "pending"
+    # Undo any effort adjustment that set made: the target goes back to the undone set's
+    # weight (what it was going into that set), and an "easy" bump gives its step back.
+    undone = batch[0]
+    if row.target_weight_kg:
+        if undone.effort == "easy" and row.target_weight_kg > undone.weight_kg:
+            row.easy_steps = max(0, row.easy_steps - 1)
+        row.target_weight_kg = undone.weight_kg
     await db.flush()
     return True
 
@@ -284,7 +292,7 @@ async def plan_day_targets(
     lightened = await repo.get_lightened_dates(
         db, ctx.user_id, (now - HISTORY_FOR_SUGGESTIONS).astimezone(ctx.tz).date()
     )
-    by_exercise: dict[int, list[tuple[datetime, int, Decimal]]] = defaultdict(list)
+    by_exercise: dict[int, list[Row]] = defaultdict(list)
     trained_today = False
     for s in history:
         logged_on = s.logged_at.astimezone(ctx.tz).date()
@@ -293,7 +301,7 @@ async def plan_day_targets(
             continue
         if logged_on in lightened:
             continue
-        by_exercise[s.exercise_id].append((s.logged_at, s.reps, s.weight_kg))
+        by_exercise[s.exercise_id].append((s.logged_at, s.reps, s.weight_kg, s.effort))
 
     items = []
     for pe in day.exercises:

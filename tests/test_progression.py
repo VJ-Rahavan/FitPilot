@@ -81,15 +81,16 @@ def test_kg_steps():
 def test_group_sessions_uses_top_weight_per_local_day():
     tz = ZoneInfo("Asia/Kolkata")
     rows = [
-        (T0, 5, to_kg(135, "lb")),  # warm-up
-        (T0 + timedelta(minutes=5), 5, to_kg(185, "lb")),
-        (T0 + timedelta(minutes=8), 4, to_kg(185, "lb")),
-        (T0 + timedelta(days=7), 5, to_kg(185, "lb")),
+        (T0, 5, to_kg(135, "lb"), None),  # warm-up
+        (T0 + timedelta(minutes=5), 5, to_kg(185, "lb"), None),
+        (T0 + timedelta(minutes=8), 4, to_kg(185, "lb"), "hard"),
+        (T0 + timedelta(days=7), 5, to_kg(185, "lb"), None),
     ]
     sessions = group_sessions(rows, tz)
     assert len(sessions) == 2
     assert display_weight(sessions[0].weight_kg, "lb") == 185
     assert sessions[0].reps == (5, 4)
+    assert sessions[0].efforts == (None, "hard") and sessions[0].felt_hard
 
 
 def test_detect_pr():
