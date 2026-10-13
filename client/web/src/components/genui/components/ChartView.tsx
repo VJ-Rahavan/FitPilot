@@ -35,6 +35,23 @@ const tooltipProps = {
   cursor: { fill: 'rgba(198, 244, 50, 0.06)', stroke: '#333a44' },
 }
 
+/** Round axis ticks (steps of 1, 2 or 5 × 10^n) covering all the data, about 4 intervals. */
+function niceTicks(values: number[], fromZero: boolean): number[] | undefined {
+  if (values.length === 0) return undefined
+  let min = fromZero ? 0 : Math.min(...values)
+  let max = Math.max(...values)
+  if (min === max) {
+    min -= 1
+    max += 1
+  }
+  const raw = (max - min) / 4
+  const magnitude = 10 ** Math.floor(Math.log10(raw))
+  const step = ([1, 2, 5, 10].find((m) => m * magnitude >= raw) ?? 10) * magnitude
+  const ticks = [Math.floor(min / step) * step]
+  while (ticks[ticks.length - 1] < max) ticks.push(Number((ticks[ticks.length - 1] + step).toFixed(6)))
+  return ticks
+}
+
 export function ChartView({ node }: { node: ChartNode }) {
   const series = node.series.map((s, i) => ({
     ...s,
@@ -44,6 +61,10 @@ export function ChartView({ node }: { node: ChartNode }) {
   const unit = node.unit ? ` ${node.unit}` : ''
   const valueFormatter = (v: unknown) => `${formatValue(v)}${unit}`
   const showLegend = series.length > 1 || node.chart_type === 'pie'
+  const values = node.data.flatMap((row) =>
+    node.series.map((s) => row[s.key]).filter((v): v is number => typeof v === 'number'),
+  )
+  const ticks = niceTicks(values, node.chart_type === 'bar')
 
   const axes = (
     <>
@@ -63,7 +84,8 @@ export function ChartView({ node }: { node: ChartNode }) {
         tickLine={false}
         axisLine={false}
         width={48}
-        domain={node.chart_type === 'bar' ? [0, 'auto'] : ['auto', 'auto']}
+        ticks={ticks}
+        domain={ticks ? [ticks[0], ticks[ticks.length - 1]] : ['auto', 'auto']}
         tickFormatter={(v) => formatValue(v)}
       />
       <Tooltip {...tooltipProps} labelFormatter={formatAxisLabel} formatter={valueFormatter} />

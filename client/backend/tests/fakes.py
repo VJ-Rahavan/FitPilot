@@ -16,12 +16,14 @@ def tool_call(name: str, args: dict, call_id: str = "call-1") -> AIMessage:
 class ScriptedChatModel(BaseChatModel):
     replies: list[AIMessage]
     seen: list[list[BaseMessage]] = []
+    bind_kwargs: list[dict] = []
 
     @property
     def _llm_type(self) -> str:
         return "scripted"
 
     def bind_tools(self, tools: Any, **kwargs: Any) -> "ScriptedChatModel":
+        self.bind_kwargs.append({"tools": [getattr(t, "name", t) for t in tools], **kwargs})
         return self
 
     def _next(self, messages: list[BaseMessage]) -> AIMessage:

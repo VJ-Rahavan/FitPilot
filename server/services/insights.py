@@ -12,8 +12,9 @@ def fallback_insight(
     if planned and sessions < planned:
         missing = planned - sessions
         more = "one more session" if missing == 1 else f"{missing} more sessions"
+        # The summary already says "N of M planned days", so don't repeat the count.
         return (
-            f"You trained {sessions} of your {planned} planned days. "
+            "Every session counts most right now. "
             f"Fitting in {more} will do more for your progress than adding weight."
         )
     if change is not None and change < Decimal("-0.10"):

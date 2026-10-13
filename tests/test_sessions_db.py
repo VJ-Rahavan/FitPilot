@@ -174,6 +174,8 @@ async def test_undo_rewinds_the_session(tools_url):
     await call(tools_url, "complete_set")
     undo = await call(tools_url, "undo_last_log")
     assert text_of(undo).endswith("I've moved your workout back to that set.")
+    card = next(c for c in undo.structured_content["components"] if c["type"] == "session_card")
+    assert card["set_number"] == 1  # the screen shows the set it moved back to
     redo = await call(tools_url, "complete_set")
     assert text_of(redo).startswith("Set 1 of ")
     await call(tools_url, "end_session")

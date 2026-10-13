@@ -12,7 +12,8 @@ from rapidfuzz import fuzz, process
 # A fuzzy match is accepted only above this score and clearly ahead of the runner-up.
 MATCH_THRESHOLD = 88.0
 MATCH_MARGIN = 5.0
-SUGGESTION_THRESHOLD = 60.0
+# Below this, a "did you mean" would be noise (e.g. "zumba" vs "dumbbell bench press" = 60).
+SUGGESTION_THRESHOLD = 70.0
 MAX_SUGGESTIONS = 3
 
 

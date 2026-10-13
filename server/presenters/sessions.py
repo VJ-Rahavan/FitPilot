@@ -146,6 +146,13 @@ def _next_step_components(view: SessionView) -> list[dict[str, Any]]:
     return [_session_card(view), _controls()]
 
 
+def with_session_card(p: Presentation, view: SessionView | None) -> Presentation:
+    """Add the current set's card and controls (e.g. after undo moved the workout back)."""
+    if view is None or view.current is None:
+        return p
+    return Presentation(p.text, [*p.components, *_next_step_components(view)], p.display)
+
+
 # --- start_session ------------------------------------------------------------------------
 
 

@@ -212,8 +212,22 @@ Signature feature: live voice coaching between sets ("that felt easy" changes th
   display area (full results replace the screen, fragments stack on top). Uses the imported
   renderer with the dark theme, plus new `session_card` and `plate_diagram` views; buttons
   call `/api/action`.
-- **Measured live:** 5-turn workout conversation, correct tool every turn, 0.5–1.2 s per
-  turn.
+- **Measured live:** 14-turn workout conversation (start, done, effort, undo, skip, end,
+  bodyweight, a vague question, a greeting), correct tool every turn, 0.5–1.6 s per turn.
+- **Fixes from the first browser test (Claude in Chrome, 24 steps, 13 passed):**
+  - The agent sometimes imitated FitGen's replies ("Set 1 of 4 completed.") without calling
+    a tool, so nothing was logged. Every turn must now call a tool (`tool_choice` forced by
+    middleware); greetings and clarifying questions go through a small `reply` tool, which
+    is told never to claim an action.
+  - Slow turns (8–22 s) were Groq's free-tier limit: it counts each request's maximum answer
+    length. Capping answers at 300 tokens (a tool call needs < 100) and sending only the last
+    3 turns removed the stalls (8 quick turns: 31 s before, 7 s after).
+  - The retry guard was 8 s, which refused a real "Log set" 5 s after the previous set;
+    now 3 s. Undo inside a workout now returns the session card for the set it moved back
+    to, and the web app shows only the newest quick result (no stale buttons).
+  - "Did you mean" suggestions need a closer match (no more "zumba → dumbbell bench press");
+    the weekly fallback note no longer repeats the session count; chart axes use round
+    ticks.
 
 ### Signature feature: live effort coaching and "beat last time"
 
@@ -336,9 +350,9 @@ After any model change, rerun `uv run python -m server.db.seed --reset` (wipes a
    ext-apps spec in Phase 5.
 2. **Deployment note for Phase 9.** The SDK's DNS-rebinding protection defaults to
    localhost hosts; allowed hosts must be configured behind the ALB.
-3. **Groq free-tier rate limit.** 8,000 tokens per minute for `gpt-oss-120b`; each demo
-   turn costs about 2.5k tokens, so very fast back-to-back turns can stall while the SDK
-   waits for the limit to reset. Fine for a paced demo; a paid Groq tier removes it.
+3. **Groq free-tier rate limit.** 8,000 tokens per minute on every Groq model for this key.
+   With the 300-token answer cap and 3-turn history, a turn costs about 1.5–2k tokens and
+   normal-paced conversation no longer stalls; a paid tier would remove the limit.
 4. **Voice in a real browser.** Mic and speech output can't be tested here; check in Chrome
    or Edge before demoing.
 5. **Rotate exposed API keys.** The Groq key (and an OpenRouter key, unused) were pasted in
