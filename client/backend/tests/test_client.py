@@ -1,0 +1,208 @@
+"""Demo client backend against a real FitGen MCP server (scripted chat model)."""
+
+import json
+
+import pytest
+from fastapi.testclient import TestClient
+from langchain_aws import ChatBedrockConverse
+from langchain_groq import ChatGroq
+
+from fitgen_client.app import create_app
+from fitgen_client.config import ClientSettings
+from fitgen_client.llm import ModelNotConfigured, build_chat_model
+from fitgen_client.mcp_tools import load_tools, mcp_session
+from tests.conftest import API_KEY
+from tests.fakes import ScriptedChatModel, tool_call
+
+
+def settings(url: str, **overrides) -> ClientSettings:
+    # _env_file=None: tests don't depend on the developer's .env.
+    return ClientSettings(
+        _env_file=None, mcp_url=url, mcp_api_key=API_KEY, groq_api_key="", **overrides
+    )
+
+
+def parse_sse(body: str) -> list[tuple[str, dict]]:
+    events = []
+    for block in body.strip().split("\n\n"):
+        lines = dict(line.split(": ", 1) for line in block.splitlines())
+        events.append((lines["event"], json.loads(lines["data"])))
+    return events
+
+
+def chat(client: TestClient, message: str, conversation_id: str | None = None):
+    response = client.post(
+        "/api/chat", json={"message": message, "conversation_id": conversation_id}
+    )
+    assert response.status_code == 200
+    return parse_sse(response.text)
+
+
+# --- MCP tool wrapping ----------------------------------------------------------------------
+
+
+async def test_tools_load_with_schemas(fitgen_url):
+    async with mcp_session(fitgen_url, API_KEY) as session:
+        tools = {t.name: t for t in await load_tools(session)}
+        assert "ping" not in tools
+        assert {"log_workout", "start_session", "complete_set", "plate_calculator"} <= set(tools)
+        assert tools["log_workout"].args_schema["properties"]["sets"]["minimum"] == 1
+
+        message = await tools["plate_calculator"].ainvoke(
+            {"type": "tool_call", "id": "c1", "name": "plate_calculator", "args": {"weight": 225}}
+        )
+    assert message.content == "For 225 pounds, put two 45s on each side of the 45-pound bar."
+    assert message.artifact["components"][0]["type"] == "plate_diagram"
+    assert message.artifact == message.artifact | {"display": "fragment", "is_error": False}
+
+
+async def test_wrong_api_key_is_rejected(fitgen_url):
+    with pytest.raises(Exception):  # noqa: B017 - the transport surfaces the 401 its own way
+        async with mcp_session(fitgen_url, "wrong-key") as session:
+            await session.list_tools()
+
+
+# --- /api/chat ------------------------------------------------------------------------------
+
+
+def test_chat_streams_tool_result_and_reply(fitgen_url):
+    model = ScriptedChatModel(
+        replies=[tool_call("plate_calculator", {"weight": 225}), _ai("Two 45s on each side.")]
+    )
+    client = TestClient(create_app(settings(fitgen_url), model_factory=lambda s: model))
+    events = chat(client, "What plates for 225?")
+    kinds = [e for e, _ in events]
+
+    assert kinds[0] == "tool_start" and events[0][1]["name"] == "plate_calculator"
+    result = next(d for e, d in events if e == "tool_result")
+    assert result["name"] == "plate_calculator"
+    assert result["text"].startswith("For 225 pounds")
+    assert result["components"][0]["type"] == "plate_diagram"
+    done = events[-1]
+    # Tools return directly: FitGen's own text is the spoken reply, in one model call.
+    assert done[0] == "done" and done[1]["text"] == result["text"]
+    assert len(model.seen) == 1
+
+
+def test_chat_remembers_the_conversation(fitgen_url):
+    model = ScriptedChatModel(replies=[_ai("Hi there."), _ai("You said hello.")])
+    client = TestClient(create_app(settings(fitgen_url), model_factory=lambda s: model))
+    first = chat(client, "hello")
+    conversation_id = first[-1][1]["conversation_id"]
+    assert first[-1] == ("done", {"conversation_id": conversation_id, "text": "Hi there."})
+    chat(client, "what did I say?", conversation_id)
+    history = [m.content for m in model.seen[1]]
+    assert "hello" in history and "Hi there." in history
+
+
+def test_tool_errors_reach_the_model_and_the_screen(fitgen_url):
+    model = ScriptedChatModel(
+        replies=[tool_call("get_form_cues", {"exercise": "zumba"}), _ai("Which exercise?")]
+    )
+    client = TestClient(create_app(settings(fitgen_url), model_factory=lambda s: model))
+    result = next(d for e, d in chat(client, "how do I zumba") if e == "tool_result")
+    assert result["is_error"] and "couldn't find" in result["text"]
+    assert result["components"][0]["type"] == "alert"
+
+
+def test_chat_without_model_config_reports_an_error(fitgen_url):
+    client = TestClient(create_app(settings(fitgen_url)))  # real factory, no Groq key
+    events = chat(client, "hello")
+    assert events == [
+        ("error", {"message": "The assistant isn't configured: GROQ_API_KEY is not set."})
+    ]
+
+
+# --- /api/action ----------------------------------------------------------------------------
+
+
+def test_action_calls_the_tool_directly(fitgen_url):
+    client = TestClient(create_app(settings(fitgen_url), model_factory=_no_model))
+    response = client.post(
+        "/api/action", json={"tool": "plate_calculator", "args": {"weight": 135}}
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["text"] == "For 135 pounds, put a 45 on each side of the 45-pound bar."
+    assert body["components"][0]["type"] == "plate_diagram"
+
+    unknown = client.post("/api/action", json={"tool": "drop_tables", "args": {}})
+    assert unknown.status_code == 404
+
+
+def test_session_buttons_drive_a_workout(fitgen_url):
+    client = TestClient(create_app(settings(fitgen_url), model_factory=_no_model))
+    start = client.post("/api/action", json={"tool": "start_session"}).json()
+    buttons = [
+        b["action"]
+        for c in start["components"]
+        if c["type"] == "layout"
+        for b in c["children"]
+        if b["type"] == "button"
+    ]
+    assert buttons == ["complete_set", "skip_exercise", "end_session"]
+    done = client.post("/api/action", json={"tool": "complete_set"}).json()
+    assert done["text"].startswith("Set 1 of ")
+    client.post("/api/action", json={"tool": "end_session"})
+
+
+# --- model factory --------------------------------------------------------------------------
+
+
+def test_build_chat_model():
+    with pytest.raises(ModelNotConfigured):
+        build_chat_model(ClientSettings(_env_file=None, groq_api_key=""))
+    groq = build_chat_model(ClientSettings(_env_file=None, groq_api_key="k"))
+    assert isinstance(groq, ChatGroq)
+    assert groq.reasoning_effort == "low"
+    assert groq.model_kwargs == {"parallel_tool_calls": False, "include_reasoning": False}
+    bedrock = build_chat_model(ClientSettings(_env_file=None, llm_provider="bedrock"))
+    assert isinstance(bedrock, ChatBedrockConverse)
+    assert bedrock.model_id == "amazon.nova-lite-v1:0"
+
+
+def _ai(text: str):
+    from langchain_core.messages import AIMessage
+
+    return AIMessage(content=text)
+
+
+def _no_model(settings):
+    raise AssertionError("button actions must not call the LLM")
+
+
+def test_failed_tool_call_is_answered_and_conversation_continues(fitgen_url, monkeypatch):
+    import fitgen_client.mcp_tools as mcp_tools
+
+    real = mcp_tools.call_tool
+    calls = {"n": 0}
+
+    async def flaky(session, name, arguments):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise ConnectionError("server restarted")
+        return await real(session, name, arguments)
+
+    monkeypatch.setattr(mcp_tools, "call_tool", flaky)
+    model = ScriptedChatModel(
+        replies=[
+            tool_call("plate_calculator", {"weight": 225}, "call-1"),
+            tool_call("plate_calculator", {"weight": 135}, "call-2"),
+        ]
+    )
+    client = TestClient(create_app(settings(fitgen_url), model_factory=lambda s: model))
+    first = chat(client, "plates for 225")
+    assert first[-1][1]["text"] == mcp_tools.UNREACHABLE
+    second = chat(client, "plates for 135", first[-1][1]["conversation_id"])
+    assert second[-1][1]["text"].startswith("For 135 pounds")
+    # The failed call was answered in memory, so the history stays valid.
+    sent = model.seen[1]
+    assert any(getattr(m, "tool_call_id", None) == "call-1" for m in sent)
+
+
+def test_sdk_argument_errors_are_not_read_aloud(fitgen_url):
+    model = ScriptedChatModel(replies=[tool_call("plate_calculator", {"weight": "abc"})])
+    client = TestClient(create_app(settings(fitgen_url), model_factory=lambda s: model))
+    events = chat(client, "plates for abc")
+    assert events[-1][1]["text"] == "Sorry, I didn't catch that. Could you say it again?"
+    assert "pydantic" not in json.dumps(events)

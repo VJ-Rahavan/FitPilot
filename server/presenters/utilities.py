@@ -24,7 +24,6 @@ PAIN_ADVICE = (
     "before doing it again."
 )
 _ORDINALS = ("First", "Second", "Third", "Fourth", "Fifth")
-# After the readiness lead-in, so the rest level doesn't repeat "rest day".
 # After the pain advice: what changes for the rest of today.
 _PAIN_CHANGE = {
     "full": "Train as planned on anything that doesn't hurt.",
@@ -32,6 +31,7 @@ _PAIN_CHANGE = {
     "light": "For everything else today, I've taken 20 percent off your weights and dropped a set.",
     "rest": "Today is a good day to rest. If you train anyway, I've taken 20 percent off.",
 }
+# After the readiness lead-in, so the rest level doesn't repeat "rest day".
 _READINESS_CHANGE = {
     "full": "Train as planned on anything that doesn't hurt.",
     "reduce": "I've taken 10 percent off today's weights.",

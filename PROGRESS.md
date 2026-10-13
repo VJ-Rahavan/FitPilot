@@ -2,10 +2,11 @@
 
 Status of the build against the implementation plan. Last updated 2026-10-12.
 
-**Summary:** Phases 0–4, 6 and 7a are done on `feature/alexa-mcp-server` and verified end
-to end: 247 tests pass against a real Postgres (plus one opt-in live LLM test), all 15
-tools respond in 3–38 ms, and AI coaching notes are generated in the background with
-Groq. Phase 5 (widget) is deferred; 7b (plan tools) is next.
+**Summary:** Phases 0–4, 6, 7a and 8 are done on `feature/alexa-mcp-server` and verified end
+to end: 247 server tests and 11 demo-client tests pass against a real Postgres (plus
+opt-in live LLM tests), all 15 tools respond in 3–38 ms, AI coaching notes are generated in
+the background with Groq, and a voice demo client drives FitGen at about 0.6 s per turn.
+Phase 5 (widget) is deferred.
 
 ## Phase status
 
@@ -20,7 +21,7 @@ Groq. Phase 5 (widget) is deferred; 7b (plan tools) is next.
 | 6 | Background AI jobs | ✅ Done, verified end to end (incl. live Groq) |
 | 7a | Utility tools (plates, form cues, readiness, preferences, macros) | ✅ Done, verified end to end |
 | 7b | Plan tools (create_plan, personalize_plan, adjust_plan) | ⏳ Not started |
-| 8 | Demo client | ⏳ Not started |
+| 8 | Demo client | ✅ Done, verified end to end (incl. live Groq); voice needs a browser check |
 | 9 | Deployment and docs | ⏳ Not started |
 | 10 | OAuth (only if Alexa requires it) | ⏸ Needs go-ahead |
 
@@ -189,6 +190,30 @@ Groq. Phase 5 (widget) is deferred; 7b (plan tools) is next.
 - **Macros:** bodyweight-based estimate (about 33 kcal/kg × goal factor; protein 1.6–2.2 g/kg;
   fat 0.9 g/kg; carbs the rest), using the latest weigh-in when no weight is given.
 
+### Phase 8: Demo client (stand-in for Alexa+)
+
+- **Backend** (`client/backend/`, its own uv project, port 8100):
+  - `mcp_tools.py` wraps the FitGen MCP tools (official mcp 2.x client) as LangChain tools
+    that return (spoken text, components). langchain-mcp-adapters can't be used with mcp 2.x
+    (FRICTION_LOG #1).
+  - Tools are `return_direct`: one LLM call per turn, and FitGen's voice-complete text is
+    spoken verbatim. One tool per turn (`parallel_tool_calls: false`), so the agent can't
+    chain an action the user didn't ask for.
+  - `create_agent` (LangChain 1.x) with Groq `openai/gpt-oss-120b` (default) or Bedrock
+    (mocked only); conversation memory in memory per conversation.
+  - `POST /api/chat` streams SSE (`text`, `tool_start`, `tool_result` with components,
+    `done`, `error`); `POST /api/action` runs a button's tool directly (allow-listed to the
+    server's tools, no LLM).
+  - Failed tool calls are always answered ("couldn't reach FitGen"), so memory stays valid;
+    SDK argument errors become "Sorry, I didn't catch that."
+- **Web app** (`client/web/`, Vite, port 5173): push-to-talk mic (Web Speech API, Chrome or
+  Edge), spoken replies (speechSynthesis) with mute, transcript with tool names, and a
+  display area (full results replace the screen, fragments stack on top). Uses the imported
+  renderer with the dark theme, plus new `session_card` and `plate_diagram` views; buttons
+  call `/api/action`.
+- **Measured live:** 5-turn workout conversation, correct tool every turn, 0.5–1.2 s per
+  turn.
+
 ## Decisions and deviations from the plan
 
 | Decision | Reason |
@@ -215,6 +240,10 @@ Groq. Phase 5 (widget) is deferred; 7b (plan tools) is next.
 | Readiness changes today's targets | "Go lighter" should change the numbers; stored per day, excluded from progression |
 | Macros from bodyweight and goal only | Avoids collecting height, age and sex; clearly labelled as an estimate |
 | Plan split into 7a and 7b | The plan-changing tools (with an LLM) need their own design and review |
+| Own MCP-to-LangChain wrapper | langchain-mcp-adapters fails to import with mcp 2.x (FRICTION_LOG #1); the plan's fallback |
+| Client backend is its own uv project | langchain-groq requires Groq SDK < 1, the server uses 1.7 (FRICTION_LOG #2) |
+| Demo tools are `return_direct` | Halves latency and Groq tokens, speaks FitGen's text verbatim, and stopped the agent chaining an unrequested `complete_set` |
+| Browser speech APIs | Free, no setup; Amazon Transcribe/Polly would be AWS during development |
 | Demo user has fixed id 1 | Keeps `get_current_user()` free of DB lookups until OAuth |
 | No tool `outputSchema` | The full catalog schema is large; tools validate against it before sending instead |
 
@@ -251,6 +280,8 @@ Measured tool latency (server timing log, local Postgres): `get_todays_workout` 
 | Real Groq call (opt-in) | `tests/test_llm_live.py` | No (network) |
 | Plates, readiness rules, pain detection, macros, preferences, spoken text | `tests/test_utilities.py` | No |
 | Utility tools end to end, readiness vs progression and active workouts, latency | `tests/test_utilities_db.py` | **Yes** |
+| Demo client: tool wrapping, SSE events, memory, actions, failures (`client/backend`) | `client/backend/tests/test_client.py` | **Yes** |
+| Demo client with real Groq: 5-turn workout conversation (opt-in) | `client/backend/tests/test_live.py` | **Yes** + network |
 
 ## How to run
 
@@ -274,16 +305,19 @@ After any model change, rerun `uv run python -m server.db.seed --reset` (wipes a
    ext-apps spec in Phase 5.
 2. **Deployment note for Phase 9.** The SDK's DNS-rebinding protection defaults to
    localhost hosts; allowed hosts must be configured behind the ALB.
-3. **Rotate exposed API keys.** The Groq key (and an OpenRouter key, unused) were pasted in
+3. **Groq free-tier rate limit.** 8,000 tokens per minute for `gpt-oss-120b`; each demo
+   turn costs about 2.5k tokens, so very fast back-to-back turns can stall while the SDK
+   waits for the limit to reset. Fine for a paced demo; a paid Groq tier removes it.
+4. **Voice in a real browser.** Mic and speech output can't be tested here; check in Chrome
+   or Edge before demoing.
+5. **Rotate exposed API keys.** The Groq key (and an OpenRouter key, unused) were pasted in
    chat. Rotate them after the hackathon; keep keys only in `.env`.
 
-## Next up: Phase 7b (plan tools) or Phase 8 (demo client)
+## Next up
 
-- **7b:** `create_plan` (instant template from goal and days per week, then a background
-  `personalize_plan` job with strict validation) and `adjust_plan` ("swap squats for leg
-  press", "make it 3 days").
-- **Phase 8:** the demo web client (mic button, spoken replies, components rendered from
-  tool results), the only way to demo FitGen without MCP Inspector.
+- **Try the voice demo** in Chrome or Edge (see README: three processes).
+- **7b:** `create_plan` (instant template, background `personalize_plan`) and `adjust_plan`.
+- **Phase 9:** AWS deployment (ECS Fargate, RDS, SQS, Bedrock) and final docs.
 
 Phase 5 (widget) is deferred. Revisit it if Alexa+ turns out to render MCP Apps; open item
 1 belongs to it.
