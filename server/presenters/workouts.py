@@ -158,6 +158,18 @@ def present_body_metric(r: BodyMetricResult) -> Presentation:
 # --- get_todays_workout ------------------------------------------------------------------
 
 
+READINESS_NOTE = {
+    "reduce": "After your readiness check, I've taken 10 percent off today's weights.",
+    "light": (
+        "After your readiness check, I've taken 20 percent off today's weights and dropped a set."
+    ),
+    "rest": (
+        "Your readiness check suggested a rest day. If you train anyway, I've taken "
+        "20 percent off and dropped a set."
+    ),
+}
+
+
 def _suggestion_text(s: Suggestion, unit: Unit) -> str:
     if s.action == "bodyweight":
         return ""
@@ -171,7 +183,9 @@ def _suggestion_cells(s: Suggestion, unit: Unit) -> tuple[str, str]:
         return "Bodyweight", ""
     if s.weight_kg is None:
         return "Your choice", "New"
-    change = {"increase": "Up", "decrease": "Deload", "hold": "Same"}.get(s.action, "")
+    change = {"increase": "Up", "decrease": "Deload", "hold": "Same", "lighter": "Lighter"}.get(
+        s.action, ""
+    )
     return format_weight(s.weight_kg, unit, spoken=False), change
 
 
@@ -203,10 +217,14 @@ def present_todays_workout(w: TodaysWorkout) -> Presentation:
     deloaded = [
         spoken_exercise(i.exercise.name) for i in w.items if i.suggestion.action == "decrease"
     ]
-    if increased:
-        text += f" You've earned more weight on {join_words(increased)}."
-    if deloaded:
-        text += f" I've lightened {join_words(deloaded)} after two tough sessions."
+    if w.readiness != "full":
+        # Readiness overrides the usual progression notes for today.
+        text += " " + READINESS_NOTE[w.readiness]
+    else:
+        if increased:
+            text += f" You've earned more weight on {join_words(increased)}."
+        if deloaded:
+            text += f" I've lightened {join_words(deloaded)} after two tough sessions."
 
     rows = []
     for i in w.items:

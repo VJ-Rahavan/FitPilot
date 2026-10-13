@@ -19,6 +19,7 @@ from server.db.models import (
     Plan,
     PlanDay,
     PlanExercise,
+    ReadinessCheck,
     UserProfile,
     WorkoutSession,
 )
@@ -41,6 +42,10 @@ async def load_exercise_entries(db: AsyncSession) -> list[ExerciseEntry]:
     ]
 
 
+async def get_exercise_equipment(db: AsyncSession, exercise_id: int) -> str:
+    return await db.scalar(select(Exercise.equipment).where(Exercise.id == exercise_id))
+
+
 async def get_exercise(db: AsyncSession, exercise_id: int) -> Exercise | None:
     return await db.get(Exercise, exercise_id)
 
@@ -50,6 +55,52 @@ async def get_exercise(db: AsyncSession, exercise_id: int) -> Exercise | None:
 
 async def get_profile(db: AsyncSession, user_id: int) -> UserProfile | None:
     return await db.get(UserProfile, user_id)
+
+
+async def create_profile(db: AsyncSession, user_id: int, **fields) -> UserProfile:
+    profile = UserProfile(user_id=user_id, **fields)
+    db.add(profile)
+    await db.flush()
+    return profile
+
+
+# --- Readiness ---------------------------------------------------------------------------
+
+
+async def upsert_readiness(
+    db: AsyncSession, user_id: int, on_date: date, level: str, pain_reported: bool
+) -> None:
+    """The latest check of the day wins."""
+    row = await get_readiness(db, user_id, on_date)
+    if row is None:
+        db.add(
+            ReadinessCheck(
+                user_id=user_id, on_date=on_date, level=level, pain_reported=pain_reported
+            )
+        )
+    else:
+        row.level, row.pain_reported = level, pain_reported
+    await db.flush()
+
+
+async def get_lightened_dates(db: AsyncSession, user_id: int, since: date) -> set[date]:
+    """Days when readiness lightened training (excluded from progression history)."""
+    rows = await db.scalars(
+        select(ReadinessCheck.on_date).where(
+            ReadinessCheck.user_id == user_id,
+            ReadinessCheck.on_date >= since,
+            ReadinessCheck.level != "full",
+        )
+    )
+    return set(rows)
+
+
+async def get_readiness(db: AsyncSession, user_id: int, on_date: date) -> ReadinessCheck | None:
+    return await db.scalar(
+        select(ReadinessCheck).where(
+            ReadinessCheck.user_id == user_id, ReadinessCheck.on_date == on_date
+        )
+    )
 
 
 # --- Plans -------------------------------------------------------------------------------

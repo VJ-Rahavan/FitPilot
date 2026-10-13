@@ -145,7 +145,9 @@ async def test_enqueue_debounces(sessionmaker):
 
 
 async def test_week_without_training_is_skipped(sessionmaker):
-    monday = datetime.combine(TODAY - timedelta(days=TODAY.weekday()), time(0, 1), tzinfo=TZ)
+    # A future week: never has seeded training, whatever today's date is.
+    future = TODAY + timedelta(weeks=2)
+    monday = datetime.combine(future - timedelta(days=future.weekday()), time(9), tzinfo=TZ)
     llm = FakeLLM(GOOD)
     job_id = await enqueue(sessionmaker, run_after=monday)
     await worker(sessionmaker, llm, clock=lambda: monday).process_due()

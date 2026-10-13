@@ -245,6 +245,25 @@ class BodyMetric(Base):
     measured_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
+class ReadinessCheck(TimestampMixin, Base):
+    """Today's readiness level, which lightens that day's suggested weights.
+
+    Free-text notes are never stored; only the level and whether pain was mentioned.
+    """
+
+    __tablename__ = "readiness_checks"
+    __table_args__ = (
+        UniqueConstraint("user_id", "on_date"),
+        CheckConstraint("level IN ('full', 'reduce', 'light', 'rest')", name="ck_readiness_level"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    on_date: Mapped[date] = mapped_column(Date)  # the user's local date
+    level: Mapped[str] = mapped_column(String(10))
+    pain_reported: Mapped[bool] = mapped_column(default=False)
+
+
 class Insight(TimestampMixin, Base):
     __tablename__ = "insights"
     __table_args__ = (UniqueConstraint("user_id", "week_start"),)

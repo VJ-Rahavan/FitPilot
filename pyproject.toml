@@ -14,6 +14,7 @@ dependencies = [
     "pydantic-settings>=2.15.0",
     "rapidfuzz>=3.14.6",
     "sqlalchemy[asyncio]>=2",
+    "tzdata>=2026.5",
     "uvicorn[standard]>=0.54.0",
 ]
 

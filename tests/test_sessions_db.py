@@ -70,7 +70,8 @@ async def test_full_walk_through(tools_url):
 
     first = await call(tools_url, "complete_set")
     assert SET_DONE.match(text_of(first)), text_of(first)
-    assert text_of(first).endswith(" done.") or "Next up:" in text_of(first)
+    # Only the short confirmation, maybe a record; never a read-back of the next set.
+    assert "Next, set" not in text_of(first)
     assert_three_parts(first, "fragment")
     assert [c["type"] for c in first.structured_content["components"]][:2] == [
         "session_card",

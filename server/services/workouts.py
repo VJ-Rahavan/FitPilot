@@ -18,7 +18,12 @@ from server.db.models import Plan, PlanDay
 from server.services.context import UserContext, UserFacingError
 from server.services.exercise_resolver import ExerciseEntry, ExerciseResolver
 from server.services.insights import fallback_insight
-from server.services.progression import Suggestion, group_sessions, suggest
+from server.services.progression import (
+    Suggestion,
+    group_sessions,
+    suggest,
+)
+from server.services.readiness import SETS_DROPPED, lighten
 from server.services.records import PRKind, detect_pr, estimated_1rm
 from server.services.units import Unit, to_kg
 
@@ -232,6 +237,7 @@ class TodaysWorkout:
     next_day_name: str | None = None
     next_weekday: str | None = None
     already_trained_today: bool = False
+    readiness: str = "full"  # today's readiness level, already applied to the items
 
 
 async def pick_plan_day(
@@ -263,8 +269,9 @@ async def plan_day_targets(
     day: PlanDay,
     *,
     now: datetime,
-) -> tuple[tuple[PlannedExercise, ...], bool]:
-    """Each exercise of `day` with its suggested weight; and whether anything was logged today.
+) -> tuple[tuple[PlannedExercise, ...], bool, str]:
+    """Each exercise of `day` with its suggested weight, whether anything was logged today,
+    and today's readiness level (already applied: lighter weights, maybe a set fewer).
 
     Today's own sets are ignored, so suggestions stay stable during the day.
     """
@@ -273,11 +280,18 @@ async def plan_day_targets(
     history = await repo.get_sets_for_exercises(
         db, ctx.user_id, exercise_ids, since=now - HISTORY_FOR_SUGGESTIONS
     )
+    # Days lightened by a readiness check aren't a fair baseline for progression.
+    lightened = await repo.get_lightened_dates(
+        db, ctx.user_id, (now - HISTORY_FOR_SUGGESTIONS).astimezone(ctx.tz).date()
+    )
     by_exercise: dict[int, list[tuple[datetime, int, Decimal]]] = defaultdict(list)
     trained_today = False
     for s in history:
-        if s.logged_at.astimezone(ctx.tz).date() == today:
+        logged_on = s.logged_at.astimezone(ctx.tz).date()
+        if logged_on == today:
             trained_today = True
+            continue
+        if logged_on in lightened:
             continue
         by_exercise[s.exercise_id].append((s.logged_at, s.reps, s.weight_kg))
 
@@ -292,7 +306,23 @@ async def plan_day_targets(
             unit=ctx.unit,
         )
         items.append(PlannedExercise(entry, pe.sets, pe.reps, suggestion))
-    return tuple(items), trained_today
+
+    readiness = await repo.get_readiness(db, ctx.user_id, today)
+    level = readiness.level if readiness else "full"
+    if level != "full":
+        items = [_apply_readiness(item, level, ctx) for item in items]
+    return tuple(items), trained_today, level
+
+
+def _apply_readiness(item: PlannedExercise, level: str, ctx: UserContext) -> PlannedExercise:
+    sets = max(1, item.sets - SETS_DROPPED[level])
+    suggestion = item.suggestion
+    if suggestion.weight_kg is not None and suggestion.weight_kg > 0:
+        weight = lighten(
+            suggestion.weight_kg, level, item.exercise.equipment, ctx.unit, ctx.bar_weight_kg
+        )
+        suggestion = Suggestion("lighter", weight)
+    return PlannedExercise(item.exercise, sets, item.reps, suggestion)
 
 
 async def get_todays_workout(
@@ -307,9 +337,14 @@ async def get_todays_workout(
         return TodaysWorkout(
             ctx.unit, True, next_day_name=next_day.name, next_weekday=WEEKDAYS[next_day.weekday]
         )
-    items, trained_today = await plan_day_targets(db, ctx, resolver, day, now=now)
+    items, trained_today, readiness = await plan_day_targets(db, ctx, resolver, day, now=now)
     return TodaysWorkout(
-        ctx.unit, True, day_name=day.name, items=items, already_trained_today=trained_today
+        ctx.unit,
+        True,
+        day_name=day.name,
+        items=items,
+        already_trained_today=trained_today,
+        readiness=readiness,
     )
 
 

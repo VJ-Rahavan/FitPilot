@@ -141,7 +141,7 @@ async def start_session(
     day = day or next_day
     if not day.exercises:
         raise UserFacingError(f"{day.name} doesn't have any exercises in your plan yet.")
-    targets, _ = await plan_day_targets(db, ctx, resolver, day, now=now)
+    targets, _, _ = await plan_day_targets(db, ctx, resolver, day, now=now)
 
     session = WorkoutSession(
         user_id=ctx.user_id,

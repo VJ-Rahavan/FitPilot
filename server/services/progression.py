@@ -13,7 +13,8 @@ from typing import Literal
 
 from server.services.units import Unit, from_kg, to_kg
 
-Action = Literal["start", "increase", "hold", "decrease", "bodyweight"]
+# "lighter": scaled down for today's readiness check.
+Action = Literal["start", "increase", "hold", "decrease", "bodyweight", "lighter"]
 
 DELOAD_FACTOR = Decimal("0.9")
 
@@ -61,7 +62,7 @@ def group_sessions(
     return out
 
 
-def _round_to_step(value: Decimal, step: Decimal) -> Decimal:
+def round_to_step(value: Decimal, step: Decimal) -> Decimal:
     return (value / step).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * step
 
 
@@ -81,7 +82,7 @@ def suggest(
     last = history[-1]
     current = last.weight_kg
     step = step_for(equipment, unit)
-    current_in_unit = _round_to_step(from_kg(current, unit), step)
+    current_in_unit = round_to_step(from_kg(current, unit), step)
 
     if len(history) >= 2:
         prev = history[-2]
@@ -92,6 +93,6 @@ def suggest(
         ):
             return Suggestion("increase", to_kg(current_in_unit + step, unit))
         if not last.hit(target_sets, target_reps) and not prev.hit(target_sets, target_reps):
-            reduced = max(step, _round_to_step(current_in_unit * DELOAD_FACTOR, step))
+            reduced = max(step, round_to_step(current_in_unit * DELOAD_FACTOR, step))
             return Suggestion("decrease", to_kg(reduced, unit))
     return Suggestion("hold", to_kg(current_in_unit, unit))
