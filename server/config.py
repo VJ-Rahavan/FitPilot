@@ -16,8 +16,16 @@ class Settings(BaseSettings):
 
     llm_provider: Literal["groq", "bedrock"] = "groq"
     groq_api_key: str = ""
+    groq_model_id: str = "openai/gpt-oss-120b"
+    llm_timeout_seconds: float = 20.0
+    llm_max_retries: int = 2
 
     queue_backend: Literal["local", "sqs"] = "local"
+    # Background worker inside the server process (off in most tests).
+    worker_enabled: bool = True
+    worker_poll_seconds: float = 5.0
+    # Regenerate the weekly insight this long after the last log_workout.
+    insight_debounce_minutes: float = 10.0
 
     aws_region: str = "us-east-1"
     bedrock_model_id: str = "amazon.nova-lite-v1:0"

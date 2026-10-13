@@ -19,7 +19,8 @@ from server.auth import DEMO_USER
 from server.db.models import Exercise, Job, LoggedSet, WorkoutSession
 from server.db.session import make_engine
 from server.services import sessions
-from server.services.sessions import ALL_EXERCISES_DONE, INSIGHT_JOB, NO_ACTIVE_SESSION
+from server.services.sessions import ALL_EXERCISES_DONE, NO_ACTIVE_SESSION
+from server.services.workouts import INSIGHT_JOB
 from tests.db_support import (
     LATENCY_BUDGET_MS,
     TEST_DATABASE_URL,
@@ -69,7 +70,8 @@ async def test_full_walk_through(tools_url):
 
     first = await call(tools_url, "complete_set")
     assert SET_DONE.match(text_of(first)), text_of(first)
-    assert text_of(first).endswith(" done.") or "Next up:" in text_of(first)
+    # Only the short confirmation, maybe a record; never a read-back of the next set.
+    assert "Next, set" not in text_of(first)
     assert_three_parts(first, "fragment")
     assert [c["type"] for c in first.structured_content["components"]][:2] == [
         "session_card",

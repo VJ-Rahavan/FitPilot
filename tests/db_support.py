@@ -50,3 +50,20 @@ def assert_three_parts(result, display: str) -> None:
     assert result.content and result.content[0].type == "text"
     assert result.structured_content["display"] == display
     assert result.structured_content["components"]
+
+
+class FakeLLM:
+    """Stands in for Groq/Bedrock: returns canned replies in order, records the prompts."""
+
+    model_id = "fake-model"
+
+    def __init__(self, *replies):
+        self.replies = list(replies)
+        self.prompts: list[str] = []
+
+    async def complete(self, *, system: str, user: str, max_tokens: int = 600) -> str:
+        self.prompts.append(user)
+        reply = self.replies.pop(0) if len(self.replies) > 1 else self.replies[0]
+        if isinstance(reply, Exception):
+            raise reply
+        return reply

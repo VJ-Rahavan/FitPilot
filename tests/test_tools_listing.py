@@ -17,6 +17,11 @@ UI_TOOLS = {
     "complete_set",
     "skip_exercise",
     "end_session",
+    "plate_calculator",
+    "get_form_cues",
+    "readiness_check",
+    "set_preferences",
+    "calculate_macros",
 }
 
 

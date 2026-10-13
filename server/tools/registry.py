@@ -12,7 +12,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from server.auth import get_current_user
 from server.catalog.validation import validate_components
+from server.db.repository import ENQUEUED_JOBS
 from server.db.session import session_scope
+from server.jobs.dispatch import dispatch
 from server.presenters.workouts import Presentation, present_error
 from server.services.context import UserContext, UserFacingError, load_user_context
 
@@ -48,12 +50,15 @@ async def run_tool(
     """Run a tool body in one DB transaction for the current user.
 
     A `UserFacingError` rolls the transaction back and becomes a spoken error result.
+    Background jobs queued during the call are dispatched once it has committed.
     """
     user = get_current_user()
     try:
         async with session_scope() as db:
             ctx = await load_user_context(db, user.user_id)
             presentation = await handler(db, ctx)
+            enqueued = db.info.get(ENQUEUED_JOBS, [])
     except UserFacingError as err:
         return to_result(present_error(err), is_error=True)
+    dispatch(enqueued)  # only after the transaction committed
     return to_result(presentation)

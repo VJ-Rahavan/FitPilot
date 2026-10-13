@@ -2,8 +2,11 @@
 
 Status of the build against the implementation plan. Last updated 2026-10-12.
 
-**Summary:** Phases 0–4 of 11 are done on `feature/alexa-mcp-server` and verified end to
-end: all 152 tests pass against a real Postgres, and every tool call takes 6–36 ms.
+**Summary:** Phases 0–4, 6, 7a and 8 are done on `feature/alexa-mcp-server` and verified end
+to end: 247 server tests and 11 demo-client tests pass against a real Postgres (plus
+opt-in live LLM tests), all 15 tools respond in 3–38 ms, AI coaching notes are generated in
+the background with Groq, and a voice demo client drives FitGen at about 0.6 s per turn.
+Phase 5 (widget) is deferred.
 
 ## Phase status
 
@@ -14,10 +17,11 @@ end: all 152 tests pass against a real Postgres, and every tool call takes 6–3
 | 2 | Data layer | ✅ Done, verified against Postgres |
 | 3 | Catalog, presenters, MVP tools | ✅ Done, verified end to end |
 | 4 | Guided session | ✅ Done, verified end to end |
-| 5 | Widget (MCP Apps) | ⏳ Not started |
-| 6 | Background AI jobs | ⏳ Not started |
-| 7 | Stretch utilities | ⏳ Not started |
-| 8 | Demo client | ⏳ Not started |
+| 5 | Widget (MCP Apps) | ⏸ Deferred: unclear whether Alexa+ renders MCP Apps |
+| 6 | Background AI jobs | ✅ Done, verified end to end (incl. live Groq) |
+| 7a | Utility tools (plates, form cues, readiness, preferences, macros) | ✅ Done, verified end to end |
+| 7b | Plan tools (create_plan, personalize_plan, adjust_plan) | ⏳ Not started |
+| 8 | Demo client | ✅ Done, verified end to end (incl. live Groq); voice needs a browser check |
 | 9 | Deployment and docs | ⏳ Not started |
 | 10 | OAuth (only if Alexa requires it) | ⏸ Needs go-ahead |
 
@@ -126,6 +130,90 @@ end: all 152 tests pass against a real Postgres, and every tool call takes 6–3
   (one queued per user) for the Phase 6 worker.
 - `get_todays_workout` now includes a "Start workout" button.
 
+### Phase 6: Background AI jobs
+
+- **LLM clients** (`server/jobs/llm.py`): `LLMClient` interface; `GroqClient` (default,
+  `openai/gpt-oss-120b`, low reasoning effort) and `BedrockClient` (Converse API, Nova Lite,
+  run in a thread), both with timeouts and retries. Selected by `LLM_PROVIDER`.
+- **Queue** (`server/jobs/queue.py`): `LocalQueue` (default) and `SqsQueue`, selected by
+  `QUEUE_BACKEND`. The `jobs` table is the source of truth; messages only wake the worker.
+  Jobs are dispatched after the tool's transaction commits (`server/jobs/dispatch.py`).
+- **Worker** (`server/jobs/worker.py`): runs inside the server process (FastAPI lifespan).
+  Sweeps due jobs, claims each atomically, retries with backoff (30 s, 60 s), fails after
+  3 attempts. At startup it requeues jobs left running or queued. A missing Groq key
+  disables the worker with a warning instead of crashing.
+- **`regenerate_weekly_insight`** (`server/jobs/insights.py`):
+  - Computes the week's metrics in Python and sends only numbers, exercise names, the goal
+    and the unit (no name, id or other personal data).
+  - Validates the reply: 1–2 sentences, ≤ 240 characters, no markdown, no pain, injury or
+    diet mentions, must name an exercise or a number from the data. Normalizes for speech
+    ("175 lb" → "175 pounds", "175 lb bench press" → "175-pound bench press", "%" →
+    "percent", "PR" → "personal record"). One retry with the rejection reason.
+  - Stores the note in `insights`; `get_weekly_summary` then speaks it as "Coach's note".
+  - The LLM call runs outside any database transaction.
+- **Triggers:** `end_session` and closing a stale workout (immediately); `log_workout`
+  (debounced 10 minutes after the last log); `undo_last_log` (immediately, so a misheard
+  record doesn't stay in the note). Each job carries the `week_start` it's about.
+- **Concurrency:** one queued job per user and kind (partial unique index + atomic upsert);
+  requests reschedule it. Enqueueing while a job runs creates a new one.
+- **Weekly summary:** the current week now says "So far this week" with no volume
+  comparison (a partial week vs a full one was misleading); the model is told when the
+  week isn't over.
+- `personalize_plan` is deferred to Phase 7 (with `create_plan`).
+
+### Phase 7a: Utility tools
+
+| Tool | Inputs | Example answer |
+|---|---|---|
+| `plate_calculator` | weight, unit? | "For 225 pounds, put two 45s on each side of the 45-pound bar." |
+| `get_form_cues` | exercise | "Three cues for deadlift. First, bar over mid foot before you pull. Second, …" |
+| `readiness_check` | sleep_hours?, soreness?, energy?, pain_mentioned?, notes? | "With very little sleep, let's keep today light. I've taken 20 percent off today's weights and dropped a set." |
+| `set_preferences` | unit?, bar_weight?, goal?, days_per_week?, timezone? | "Done. I'll use kilograms, focus on building muscle and plan for 3 days a week." |
+| `calculate_macros` | bodyweight?, unit? | "For strength at 80 kilograms, aim for about 2,750 calories a day. That's roughly 145 grams of protein, …" |
+
+- **Plates:** greedy per side (US 45/35/25/10/5/2.5 lb, kg 25/20/15/10/5/2.5/1.25); bar from
+  the profile, or its counterpart in the other unit (45 lb ↔ 20 kg, 35 lb ↔ 15 kg); handles
+  below-the-bar, empty-bar and non-loadable requests ("closest is 185"). Returns
+  `plate_diagram`.
+- **Readiness:** deterministic points → full, reduce (−10%), light (−20%, one set fewer) or
+  rest. Stored per day in a new `readiness_checks` table (level and pain flag only; notes
+  are never stored) and applied to `get_todays_workout` and `start_session`; a check during
+  an active workout lightens the remaining exercises. Lightened days are excluded from
+  progression history, and barbell targets never drop below the empty bar.
+- **Pain safety:** a broad pain regex or the `pain_mentioned` flag always leads with "If
+  something hurts, stop that exercise and see a doctor or physical therapist before doing
+  it again." Never "train as planned", never a diagnosis.
+- **Preferences:** partial updates; creates the profile on first run (asks for units, goal
+  and days with an example when nothing is given). Goals accept phrases ("build muscle",
+  "lose weight"). Time zones accept cities, US zones and IANA names, stored in canonical
+  form (`tzdata` bundled, so it works on Linux).
+- **Macros:** bodyweight-based estimate (about 33 kcal/kg × goal factor; protein 1.6–2.2 g/kg;
+  fat 0.9 g/kg; carbs the rest), using the latest weigh-in when no weight is given.
+
+### Phase 8: Demo client (stand-in for Alexa+)
+
+- **Backend** (`client/backend/`, its own uv project, port 8100):
+  - `mcp_tools.py` wraps the FitGen MCP tools (official mcp 2.x client) as LangChain tools
+    that return (spoken text, components). langchain-mcp-adapters can't be used with mcp 2.x
+    (FRICTION_LOG #1).
+  - Tools are `return_direct`: one LLM call per turn, and FitGen's voice-complete text is
+    spoken verbatim. One tool per turn (`parallel_tool_calls: false`), so the agent can't
+    chain an action the user didn't ask for.
+  - `create_agent` (LangChain 1.x) with Groq `openai/gpt-oss-120b` (default) or Bedrock
+    (mocked only); conversation memory in memory per conversation.
+  - `POST /api/chat` streams SSE (`text`, `tool_start`, `tool_result` with components,
+    `done`, `error`); `POST /api/action` runs a button's tool directly (allow-listed to the
+    server's tools, no LLM).
+  - Failed tool calls are always answered ("couldn't reach FitGen"), so memory stays valid;
+    SDK argument errors become "Sorry, I didn't catch that."
+- **Web app** (`client/web/`, Vite, port 5173): push-to-talk mic (Web Speech API, Chrome or
+  Edge), spoken replies (speechSynthesis) with mute, transcript with tool names, and a
+  display area (full results replace the screen, fragments stack on top). Uses the imported
+  renderer with the dark theme, plus new `session_card` and `plate_diagram` views; buttons
+  call `/api/action`.
+- **Measured live:** 5-turn workout conversation, correct tool every turn, 0.5–1.2 s per
+  turn.
+
 ## Decisions and deviations from the plan
 
 | Decision | Reason |
@@ -144,13 +232,26 @@ end: all 152 tests pass against a real Postgres, and every tool call takes 6–3
 | Workout stays open after the last set | Lets the user add a set before saying "end workout" |
 | `complete_set` speaks details only when they differ | It's heard after every set; "Set 2 of 4 done." is enough |
 | 8 s retry guard on `complete_set` | Voice requests get retried; a real set never follows the last one that fast |
+| Phase 5 (widget) deferred | Unknown whether Alexa+ supports MCP Apps widgets. Voice answers are complete without it; tools keep the placeholder `ui://` resource; the Phase 8 web client can render components itself |
+| Groq `openai/gpt-oss-120b` for insights | Better coaching quality; latency doesn't matter in the background (~0.7 s per call) |
+| Worker inside the server process | Matches the plan; jobs table makes it safe to add workers later |
+| Insight doesn't prescribe weights or reps | The progression rule and `get_todays_workout` own those; the note covers priorities, consistency and stalls |
+| `personalize_plan` deferred to Phase 7 | Its trigger (`create_plan`) is there, and changing a plan with an LLM needs strict validation |
+| Readiness changes today's targets | "Go lighter" should change the numbers; stored per day, excluded from progression |
+| Macros from bodyweight and goal only | Avoids collecting height, age and sex; clearly labelled as an estimate |
+| Plan split into 7a and 7b | The plan-changing tools (with an LLM) need their own design and review |
+| Own MCP-to-LangChain wrapper | langchain-mcp-adapters fails to import with mcp 2.x (FRICTION_LOG #1); the plan's fallback |
+| Client backend is its own uv project | langchain-groq requires Groq SDK < 1, the server uses 1.7 (FRICTION_LOG #2) |
+| Demo tools are `return_direct` | Halves latency and Groq tokens, speaks FitGen's text verbatim, and stopped the agent chaining an unrequested `complete_set` |
+| Browser speech APIs | Free, no setup; Amazon Transcribe/Polly would be AWS during development |
 | Demo user has fixed id 1 | Keeps `get_current_user()` free of DB lookups until OAuth |
 | No tool `outputSchema` | The full catalog schema is large; tools validate against it before sending instead |
 
 ## Tests
 
-152 tests, **all passing** against Postgres 16 (2026-10-12). Without a reachable database
-the DB tests skip, which is not full verification.
+247 tests, **all passing** against Postgres 16 (2026-10-14), plus one opt-in live test
+against Groq (`FITGEN_LIVE_LLM=1 uv run pytest tests/test_llm_live.py -s`), which also
+passes. Without a reachable database the DB tests skip, which is not full verification.
 
 Measured tool latency (server timing log, local Postgres): `get_todays_workout` 32 ms,
 `log_workout` 25 ms, `get_weekly_summary` 14 ms, `log_body_metric` 8 ms,
@@ -172,6 +273,15 @@ Measured tool latency (server timing log, local Postgres): `get_todays_workout` 
 | Session position state machine | `tests/test_session_state.py` | No |
 | Session presenters (spoken text + components) | `tests/test_session_presenters.py` | No |
 | Guided session end to end: walk-through, skip, resume, undo, retries, stale, latency | `tests/test_sessions_db.py` | **Yes** |
+| Insight prompt, validation, normalization, privacy | `tests/test_insight_validation.py` | No |
+| Groq/Bedrock clients, local/SQS queues (mocked transports) | `tests/test_llm_and_queue.py` | No |
+| Worker: success, retries, debounce, concurrency, week targeting, recovery | `tests/test_worker_db.py` | **Yes** |
+| end_session → worker → spoken coaching note | `tests/test_jobs_flow_db.py` | **Yes** |
+| Real Groq call (opt-in) | `tests/test_llm_live.py` | No (network) |
+| Plates, readiness rules, pain detection, macros, preferences, spoken text | `tests/test_utilities.py` | No |
+| Utility tools end to end, readiness vs progression and active workouts, latency | `tests/test_utilities_db.py` | **Yes** |
+| Demo client: tool wrapping, SSE events, memory, actions, failures (`client/backend`) | `client/backend/tests/test_client.py` | **Yes** |
+| Demo client with real Groq: 5-turn workout conversation (opt-in) | `client/backend/tests/test_live.py` | **Yes** + network |
 
 ## How to run
 
@@ -195,14 +305,22 @@ After any model change, rerun `uv run python -m server.db.seed --reset` (wipes a
    ext-apps spec in Phase 5.
 2. **Deployment note for Phase 9.** The SDK's DNS-rebinding protection defaults to
    localhost hosts; allowed hosts must be configured behind the ALB.
+3. **Groq free-tier rate limit.** 8,000 tokens per minute for `gpt-oss-120b`; each demo
+   turn costs about 2.5k tokens, so very fast back-to-back turns can stall while the SDK
+   waits for the limit to reset. Fine for a paced demo; a paid Groq tier removes it.
+4. **Voice in a real browser.** Mic and speech output can't be tested here; check in Chrome
+   or Edge before demoing.
+5. **Rotate exposed API keys.** The Groq key (and an OpenRouter key, unused) were pasted in
+   chat. Rotate them after the hackathon; keep keys only in `.env`.
 
-## Next up: Phase 5, widget (MCP Apps)
+## Next up
 
-React + Vite single-file widget using `@modelcontextprotocol/ext-apps` for the host
-bridge, rendering the catalog components (including `session_card`, `timer` and the
-control buttons, which call tools), light/dark theme from hostContext, served as a hashed
-`ui://fitgen/widget-<hash>.html` resource. Resolve open item 1 (MCP Apps capability on
-2025-11-25) first.
+- **Try the voice demo** in Chrome or Edge (see README: three processes).
+- **7b:** `create_plan` (instant template, background `personalize_plan`) and `adjust_plan`.
+- **Phase 9:** AWS deployment (ECS Fargate, RDS, SQS, Bedrock) and final docs.
+
+Phase 5 (widget) is deferred. Revisit it if Alexa+ turns out to render MCP Apps; open item
+1 belongs to it.
 
 ## Claude Code agents and skills
 

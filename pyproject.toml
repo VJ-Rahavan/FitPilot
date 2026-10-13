@@ -7,11 +7,14 @@ license = "MIT"
 requires-python = ">=3.12"
 dependencies = [
     "asyncpg>=0.32.0",
+    "boto3>=1.43",
     "fastapi>=0.143.0",
+    "groq>=1.7,<2",
     "mcp>=2.3,<3",
     "pydantic-settings>=2.15.0",
     "rapidfuzz>=3.14.6",
     "sqlalchemy[asyncio]>=2",
+    "tzdata>=2026.5",
     "uvicorn[standard]>=0.54.0",
 ]
 

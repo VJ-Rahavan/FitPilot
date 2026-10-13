@@ -158,6 +158,18 @@ def present_body_metric(r: BodyMetricResult) -> Presentation:
 # --- get_todays_workout ------------------------------------------------------------------
 
 
+READINESS_NOTE = {
+    "reduce": "After your readiness check, I've taken 10 percent off today's weights.",
+    "light": (
+        "After your readiness check, I've taken 20 percent off today's weights and dropped a set."
+    ),
+    "rest": (
+        "Your readiness check suggested a rest day. If you train anyway, I've taken "
+        "20 percent off and dropped a set."
+    ),
+}
+
+
 def _suggestion_text(s: Suggestion, unit: Unit) -> str:
     if s.action == "bodyweight":
         return ""
@@ -171,7 +183,9 @@ def _suggestion_cells(s: Suggestion, unit: Unit) -> tuple[str, str]:
         return "Bodyweight", ""
     if s.weight_kg is None:
         return "Your choice", "New"
-    change = {"increase": "Up", "decrease": "Deload", "hold": "Same"}.get(s.action, "")
+    change = {"increase": "Up", "decrease": "Deload", "hold": "Same", "lighter": "Lighter"}.get(
+        s.action, ""
+    )
     return format_weight(s.weight_kg, unit, spoken=False), change
 
 
@@ -203,10 +217,14 @@ def present_todays_workout(w: TodaysWorkout) -> Presentation:
     deloaded = [
         spoken_exercise(i.exercise.name) for i in w.items if i.suggestion.action == "decrease"
     ]
-    if increased:
-        text += f" You've earned more weight on {join_words(increased)}."
-    if deloaded:
-        text += f" I've lightened {join_words(deloaded)} after two tough sessions."
+    if w.readiness != "full":
+        # Readiness overrides the usual progression notes for today.
+        text += " " + READINESS_NOTE[w.readiness]
+    else:
+        if increased:
+            text += f" You've earned more weight on {join_words(increased)}."
+        if deloaded:
+            text += f" I've lightened {join_words(deloaded)} after two tough sessions."
 
     rows = []
     for i in w.items:
@@ -250,7 +268,8 @@ def _week_label(s: WeeklySummary) -> str:
 
 def present_weekly_summary(s: WeeklySummary) -> Presentation:
     label = _week_label(s)
-    change = percent_change(s.volume_kg, s.prev_volume_kg)
+    # The current week isn't over, so comparing it with a full week would mislead.
+    change = percent_change(s.volume_kg, s.prev_volume_kg) if s.weeks_ago > 0 else None
 
     if s.sessions == 0:
         lead = f"{label} you haven't logged any training."
@@ -261,7 +280,8 @@ def present_weekly_summary(s: WeeklySummary) -> Presentation:
         days = (
             f"{s.sessions} of {s.planned} planned days" if s.planned else plural(s.sessions, "day")
         )
-        text = f"{label} you trained {days} and lifted {say_volume(s.volume_kg, s.unit)}"
+        lead = "So far this week" if s.weeks_ago == 0 else label
+        text = f"{lead} you trained {days} and lifted {say_volume(s.volume_kg, s.unit)}"
         if change is not None and change != 0:
             text += f", {'up' if change > 0 else 'down'} {abs(change)} percent from the week before"
         text += "."
