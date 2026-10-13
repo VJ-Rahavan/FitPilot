@@ -12,6 +12,7 @@ from server.presenters.speech import (
     spoken_exercise,
 )
 from server.presenters.workouts import Presentation
+from server.services.effort import Adjustment, Beat
 from server.services.sessions import (
     CompleteResult,
     EndResult,
@@ -85,6 +86,13 @@ def _session_card(view: SessionView) -> dict[str, Any]:
         card["next_up"] = "Last set of the workout"
     if item.exercise.form_cues:
         card["form_cue"] = item.exercise.form_cues[0]
+    if view.last_time is not None:
+        reps, weight_kg = view.last_time
+        card["last_time"] = (
+            plural(reps, "rep")
+            if item.bodyweight
+            else f"{format_weight(weight_kg, view.unit, spoken=False)} × {reps}"
+        )
     return card
 
 
@@ -202,10 +210,17 @@ def present_complete(r: CompleteResult) -> Presentation:
     if weight_differs:
         text += f" at {format_weight(r.weight_kg, unit)}"
     text += "."
-    if r.pr == "weight":
+    # A set that fell short isn't celebrated, even if it was the heaviest ever: "record"
+    # followed by "let's drop the weight" sounds contradictory. (Records still count.)
+    fell_short = r.effort == "failed" or r.reps < r.target_reps
+    if r.pr == "weight" and not fell_short:
         text += f" New personal record on {name}!"
     elif r.pr == "reps":
         text += f" That's a rep record on {name}!"
+    elif r.beat is not None and not fell_short:  # a record already says it beat last time
+        text += " " + _beat_text(r.beat, unit)
+    if r.adjustment is not None:
+        text += " " + _adjustment_text(r.adjustment, unit)
     if r.view.current is None:
         text += f" That's the whole workout. {_WRAP_UP}"
     elif r.exercise_finished:
@@ -216,6 +231,22 @@ def present_complete(r: CompleteResult) -> Presentation:
         seconds = REST_SECONDS_BARBELL if r.exercise.equipment == "barbell" else REST_SECONDS_OTHER
         components.insert(1, {"type": "timer", "label": "Rest", "seconds": seconds})
     return Presentation(text, components)
+
+
+def _beat_text(beat: Beat, unit: Unit) -> str:
+    if beat.kind == "weight":
+        return f"That's {format_weight(beat.amount, unit)} more than last time."
+    return f"That beats last time by {plural(int(beat.amount), 'rep')}."
+
+
+def _adjustment_text(adjustment: Adjustment, unit: Unit) -> str:
+    weight = format_weight(adjustment.weight_kg, unit)
+    return {
+        "up": f"That felt easy, so your next set is {weight}.",
+        "capped": f"That felt easy. Let's stay at {weight} for now.",
+        "hold": f"Tough one, so let's hold {weight}.",
+        "down": f"That one was tough, so let's drop your next set to {weight}.",
+    }[adjustment.action]
 
 
 # --- skip_exercise ------------------------------------------------------------------------

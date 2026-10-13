@@ -1,7 +1,7 @@
 """Guided session tools: start_session, complete_set, skip_exercise, end_session."""
 
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 from mcp.types import CallToolResult
 from pydantic import Field
@@ -62,6 +62,15 @@ async def complete_set(
         ),
     ] = None,
     unit: Annotated[str | None, Field(description=UNIT_DESCRIPTION)] = None,
+    effort: Annotated[
+        Literal["easy", "ok", "hard", "failed"] | None,
+        Field(
+            description="How the set being logged felt, only if the user said. easy: 'easy', "
+            "'too light'. ok: 'felt good', 'solid', 'nailed it'. hard: 'tough', 'rough', "
+            "'heavy'. failed: 'brutal', 'barely made it', 'couldn't finish'. Never call "
+            "complete_set again just to add effort to a set already logged."
+        ),
+    ] = None,
 ) -> CallToolResult:
     async def handler(db, ctx):
         result = await sessions.complete_set(
@@ -72,6 +81,7 @@ async def complete_set(
             weight=weight,
             unit=parse_unit_or_error(unit, ctx.unit),
             now=datetime.now(UTC),
+            effort=effort,
         )
         return present_complete(result)
 
@@ -86,7 +96,10 @@ async def complete_set(
 )
 async def skip_exercise() -> CallToolResult:
     async def handler(db, ctx):
-        return present_skip(await sessions.skip_exercise(db, ctx, await get_resolver(db)))
+        result = await sessions.skip_exercise(
+            db, ctx, await get_resolver(db), now=datetime.now(UTC)
+        )
+        return present_skip(result)
 
     return await run_tool(handler)
 

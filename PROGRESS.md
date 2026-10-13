@@ -3,10 +3,11 @@
 Status of the build against the implementation plan. Last updated 2026-10-12.
 
 **Summary:** Phases 0–4, 6, 7a and 8 are done on `feature/alexa-mcp-server` and verified end
-to end: 247 server tests and 11 demo-client tests pass against a real Postgres (plus
-opt-in live LLM tests), all 15 tools respond in 3–38 ms, AI coaching notes are generated in
-the background with Groq, and a voice demo client drives FitGen at about 0.6 s per turn.
-Phase 5 (widget) is deferred.
+to end: 274 server tests and 11 demo-client tests pass against a real Postgres (plus
+opt-in live LLM tests), all 15 tools respond in 3–55 ms, AI coaching notes are generated in
+the background with Groq, and a voice demo client drives FitGen at about 0.7 s per turn.
+Signature feature: live voice coaching between sets ("that felt easy" changes the next set,
+"you beat last time"). Phase 5 (widget) is deferred.
 
 ## Phase status
 
@@ -214,6 +215,32 @@ Phase 5 (widget) is deferred.
 - **Measured live:** 5-turn workout conversation, correct tool every turn, 0.5–1.2 s per
   turn.
 
+### Signature feature: live effort coaching and "beat last time"
+
+Added after Phase 8 to give FitGen one memorable, voice-only moment. Both live in
+`complete_set` (pure rules in `server/services/effort.py`), with no LLM on the request path.
+
+- **"That felt easy" (live autoregulation):** `complete_set` takes an optional `effort`
+  (easy, ok, hard, failed; 2+ reps short counts as failed). It adjusts the remaining sets
+  of the current exercise in the workout snapshot:
+
+  | Effort | Next sets | Spoken |
+  |---|---|---|
+  | easy (reps hit) | +1 step, at most +2 per exercise per workout | "That felt easy, so your next set is 225 pounds." |
+  | hard | hold | "Tough one, so let's hold 220 pounds." |
+  | failed | −5% (at least one step, never below the bar or above the set just done) | "That one was tough, so let's drop your next set to 210 pounds." |
+
+  Effort is stored (`logged_sets.effort`) and feeds next week's progression: a failed set is
+  a miss, and a hard or failed top set holds the weight. Sessions are judged on all working
+  sets (within 85% of the top weight), so mid-workout bumps never read as misses. Undo
+  restores the target and the easy-step budget; an effort said with a retried request is
+  kept without logging another set.
+- **"Beat last time":** each set is compared with the same set in the exercise's previous
+  session (readiness-lightened days skipped). Spoken only when beaten ("That beats last time
+  by 2 reps." / "That's 5 pounds more than last time."), never alongside a record or on a
+  set that fell short. The session card shows "Last time: 215 lb × 5. Beat it."
+- **Demo client:** the agent passes `effort` from natural phrases; verified live with Groq.
+
 ## Decisions and deviations from the plan
 
 | Decision | Reason |
@@ -244,12 +271,15 @@ Phase 5 (widget) is deferred.
 | Client backend is its own uv project | langchain-groq requires Groq SDK < 1, the server uses 1.7 (FRICTION_LOG #2) |
 | Demo tools are `return_direct` | Halves latency and Groq tokens, speaks FitGen's text verbatim, and stopped the agent chaining an unrequested `complete_set` |
 | Browser speech APIs | Free, no setup; Amazon Transcribe/Polly would be AWS during development |
+| Effort adjusts only the current exercise | Keeps changes predictable; capped at +2 steps; next week's suggestion uses the stored effort |
+| "Beat last time" spoken only when beaten | `complete_set` is heard after every set, so silence when there's nothing to celebrate |
+| No "record" announced on a set that fell short | "Record!" followed by "let's drop the weight" sounds contradictory; records still count |
 | Demo user has fixed id 1 | Keeps `get_current_user()` free of DB lookups until OAuth |
 | No tool `outputSchema` | The full catalog schema is large; tools validate against it before sending instead |
 
 ## Tests
 
-247 tests, **all passing** against Postgres 16 (2026-10-14), plus one opt-in live test
+274 tests, **all passing** against Postgres 16 (2026-10-14), plus one opt-in live test
 against Groq (`FITGEN_LIVE_LLM=1 uv run pytest tests/test_llm_live.py -s`), which also
 passes. Without a reachable database the DB tests skip, which is not full verification.
 
@@ -280,6 +310,7 @@ Measured tool latency (server timing log, local Postgres): `get_todays_workout` 
 | Real Groq call (opt-in) | `tests/test_llm_live.py` | No (network) |
 | Plates, readiness rules, pain detection, macros, preferences, spoken text | `tests/test_utilities.py` | No |
 | Utility tools end to end, readiness vs progression and active workouts, latency | `tests/test_utilities_db.py` | **Yes** |
+| Effort rules, beat-last-time, effort-aware progression | `tests/test_effort.py` | No |
 | Demo client: tool wrapping, SSE events, memory, actions, failures (`client/backend`) | `client/backend/tests/test_client.py` | **Yes** |
 | Demo client with real Groq: 5-turn workout conversation (opt-in) | `client/backend/tests/test_live.py` | **Yes** + network |
 

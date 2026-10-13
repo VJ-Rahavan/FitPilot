@@ -191,6 +191,7 @@ export interface SessionCardNode {
   unit?: 'lb' | 'kg'
   next_up?: string
   form_cue?: string
+  last_time?: string
 }
 
 export interface PlateDiagramNode {

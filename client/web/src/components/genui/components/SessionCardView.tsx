@@ -25,6 +25,11 @@ export function SessionCardView({ node }: { node: SessionCardNode }) {
           <div className="text-sm text-muted">target</div>
         </div>
       </div>
+      {node.last_time && (
+        <div className="mt-4 text-sm text-muted">
+          Last time: <span className="font-semibold text-fg">{node.last_time}</span>. Beat it.
+        </div>
+      )}
       {node.form_cue && (
         <div className="mt-5 flex items-start gap-2 rounded-xl bg-surface-2 p-3 text-sm text-fg">
           <Lightbulb className="mt-0.5 size-4 shrink-0 text-warn" /> {node.form_cue}

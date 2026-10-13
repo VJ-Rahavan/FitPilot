@@ -16,7 +16,7 @@ from mcp.client.streamable_http import streamable_http_client
 from sqlalchemy import func, select
 
 from server.auth import DEMO_USER
-from server.db.models import Exercise, Job, LoggedSet, WorkoutSession
+from server.db.models import Exercise, Job, LoggedSet, SessionExercise, WorkoutSession
 from server.db.session import make_engine
 from server.services import sessions
 from server.services.sessions import ALL_EXERCISES_DONE, NO_ACTIVE_SESSION
@@ -255,3 +255,103 @@ async def test_session_latency_under_budget(tools_url):
                     if ms >= LATENCY_BUDGET_MS:
                         slow[name] = round(ms)
     assert not slow, f"over {LATENCY_BUDGET_MS} ms: {slow}"
+
+
+async def _targets_by_position():
+    engine = make_engine(TEST_DATABASE_URL)
+    try:
+        async with engine.connect() as conn:
+            rows = await conn.execute(
+                select(SessionExercise.position, SessionExercise.target_weight_kg)
+                .join(WorkoutSession, SessionExercise.session_id == WorkoutSession.id)
+                .where(
+                    WorkoutSession.user_id == DEMO_USER.user_id, WorkoutSession.status == "active"
+                )
+                .order_by(SessionExercise.position)
+            )
+            return dict(rows.all())
+    finally:
+        await engine.dispose()
+
+
+async def test_easy_effort_raises_the_rest_of_the_exercise(tools_url):
+    await _end_if_active(tools_url)
+    start = await call(tools_url, "start_session")
+    card = next(c for c in start.structured_content["components"] if c["type"] == "session_card")
+    assert card["last_time"]  # seeded history: the same set last session
+    before = (await _targets_by_position())[0]
+
+    first = await call(tools_url, "complete_set", {"effort": "easy"})
+    assert "That felt easy, so your next set is" in text_of(first)
+    after = (await _targets_by_position())[0]
+    assert after > before
+
+    await call(tools_url, "complete_set", {"effort": "easy"})
+    third = await call(tools_url, "complete_set", {"effort": "easy"})
+    # Every plan day's first exercise has 3+ sets: the third easy set hits the 2-step cap,
+    # unless it was the exercise's last set.
+    assert "That felt easy. Let's stay at" in text_of(third) or "Next up:" in text_of(third)
+
+    effort = await _db_scalar(
+        select(LoggedSet.effort)
+        .where(LoggedSet.user_id == DEMO_USER.user_id)
+        .order_by(LoggedSet.id.desc())
+        .limit(1)
+    )
+    assert effort == "easy"
+    await call(tools_url, "end_session")
+
+
+async def test_two_reps_short_drops_the_next_set(tools_url):
+    await _end_if_active(tools_url)
+    await call(tools_url, "start_session")
+    before = (await _targets_by_position())[0]
+    short = await call(tools_url, "complete_set", {"reps": 1})
+    assert "so let's drop your next set to" in text_of(short)
+    assert (await _targets_by_position())[0] < before
+    effort = await _db_scalar(
+        select(LoggedSet.effort)
+        .where(LoggedSet.user_id == DEMO_USER.user_id)
+        .order_by(LoggedSet.id.desc())
+        .limit(1)
+    )
+    assert effort == "failed"
+    await call(tools_url, "end_session")
+
+
+async def test_undo_restores_an_effort_adjustment(tools_url):
+    await _end_if_active(tools_url)
+    await call(tools_url, "start_session")
+    before = (await _targets_by_position())[0]
+    await call(tools_url, "complete_set", {"effort": "easy"})
+    assert (await _targets_by_position())[0] > before
+    undo = await call(tools_url, "undo_last_log")
+    assert text_of(undo).endswith("I've moved your workout back to that set.")
+    assert (await _targets_by_position())[0] == before
+    redo = await call(tools_url, "complete_set")
+    assert text_of(redo).startswith("Set 1 of ")
+    logged = await _db_scalar(
+        select(LoggedSet.weight_kg)
+        .where(LoggedSet.user_id == DEMO_USER.user_id)
+        .order_by(LoggedSet.id.desc())
+        .limit(1)
+    )
+    assert logged == before  # the redo is logged at the weight actually lifted
+    await call(tools_url, "end_session")
+
+
+async def test_effort_with_a_retried_set_is_kept_without_logging_twice(tools_url, monkeypatch):
+    monkeypatch.setattr(sessions, "RETRY_WINDOW", timedelta(seconds=8))
+    await _end_if_active(tools_url)
+    await call(tools_url, "start_session")
+    await call(tools_url, "complete_set")
+    follow_up = await call(tools_url, "complete_set", {"effort": "hard"})
+    assert text_of(follow_up).startswith("I already logged that set.")
+    effort = await _db_scalar(
+        select(LoggedSet.effort)
+        .where(LoggedSet.user_id == DEMO_USER.user_id)
+        .order_by(LoggedSet.id.desc())
+        .limit(1)
+    )
+    assert effort == "hard"
+    await call(tools_url, "end_session")
