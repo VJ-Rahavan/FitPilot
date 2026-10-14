@@ -6,12 +6,13 @@ from typing import Annotated
 from mcp.types import CallToolResult
 from pydantic import Field
 
+from server.presenters.sessions import with_session_card
 from server.presenters.workouts import (
     present_body_metric,
     present_log_workout,
     present_undo,
 )
-from server.services import workouts
+from server.services import sessions, workouts
 from server.services.context import UserFacingError
 from server.services.resolver_cache import get_resolver
 from server.services.units import parse_unit
@@ -95,6 +96,13 @@ async def log_body_metric(
 )
 async def undo_last_log() -> CallToolResult:
     async def handler(db, ctx):
-        return present_undo(await workouts.undo_last_log(db, ctx, now=datetime.now(UTC)))
+        now = datetime.now(UTC)
+        result = await workouts.undo_last_log(db, ctx, now=now)
+        presentation = present_undo(result)
+        if result is not None and result.rewound_session:
+            # Show the set it moved back to, so the screen matches what was said.
+            view = await sessions.active_session_view(db, ctx, await get_resolver(db), now=now)
+            presentation = with_session_card(presentation, view)
+        return presentation
 
     return await run_tool(handler)

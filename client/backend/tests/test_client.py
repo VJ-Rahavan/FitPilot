@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 from langchain_aws import ChatBedrockConverse
 from langchain_groq import ChatGroq
 
+from fitgen_client.agent import recent_turns
 from fitgen_client.app import create_app
 from fitgen_client.config import ClientSettings
 from fitgen_client.llm import ModelNotConfigured, build_chat_model
@@ -156,6 +157,7 @@ def test_build_chat_model():
     assert isinstance(groq, ChatGroq)
     assert groq.reasoning_effort == "low"
     assert groq.model_kwargs == {"parallel_tool_calls": False, "include_reasoning": False}
+    assert groq.max_tokens == 300
     bedrock = build_chat_model(ClientSettings(_env_file=None, llm_provider="bedrock"))
     assert isinstance(bedrock, ChatBedrockConverse)
     assert bedrock.model_id == "amazon.nova-lite-v1:0"
@@ -206,3 +208,38 @@ def test_sdk_argument_errors_are_not_read_aloud(fitgen_url):
     events = chat(client, "plates for abc")
     assert events[-1][1]["text"] == "Sorry, I didn't catch that. Could you say it again?"
     assert "pydantic" not in json.dumps(events)
+
+
+# --- every turn goes through a tool ---------------------------------------------------------
+
+
+def test_model_must_call_a_tool_and_sees_recent_turns_only(fitgen_url):
+    replies = [tool_call("reply", {"text": f"Reply {i}."}, f"r{i}") for i in range(5)]
+    model = ScriptedChatModel(replies=replies)
+    client = TestClient(create_app(settings(fitgen_url), model_factory=lambda s: model))
+    conversation_id = None
+    for i in range(5):
+        events = chat(client, f"message {i}", conversation_id)
+        conversation_id = events[-1][1]["conversation_id"]
+        assert events[-1][1]["text"] == f"Reply {i}."  # the reply tool's text is spoken
+
+    assert all(k.get("tool_choice") == "any" for k in model.bind_kwargs)
+    assert "reply" in model.bind_kwargs[0]["tools"]
+    last_request = model.seen[-1]
+    users = [m.content for m in last_request if m.type == "human"]
+    assert users == ["message 2", "message 3", "message 4"]  # only the last 3 turns
+
+
+def test_recent_turns_never_splits_a_tool_call():
+    from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+
+    history = []
+    for i in range(5):
+        history += [
+            HumanMessage(f"u{i}"),
+            AIMessage("", tool_calls=[{"name": "t", "args": {}, "id": f"c{i}"}]),
+            ToolMessage("ok", tool_call_id=f"c{i}"),
+        ]
+    trimmed = recent_turns(history, keep=2)
+    assert trimmed[0].content == "u3" and len(trimmed) == 6
+    assert recent_turns(history[:3], keep=2) == history[:3]

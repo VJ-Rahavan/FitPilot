@@ -40,7 +40,9 @@ export default function App() {
       setFull(result)
       setFragments([])
     } else {
-      setFragments((prev) => [result, ...prev].slice(0, 3))
+      // Only the newest quick result: older session cards (with live buttons) would invite
+      // pressing a stale "Log set".
+      setFragments([result])
     }
   }, [])
 

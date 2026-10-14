@@ -37,6 +37,10 @@ def build_chat_model(settings: ClientSettings) -> BaseChatModel:
         timeout=settings.llm_timeout_seconds,
         max_retries=settings.llm_max_retries,
         temperature=0.3,
+        # Groq counts the maximum possible answer against the tokens-per-minute limit, so
+        # an uncapped request stalls after a few quick turns on the free tier (measured:
+        # 8 back-to-back turns took 31 s uncapped, 7 s capped). A tool call needs < 100.
+        max_tokens=300,
         model_kwargs=extra,
         **reasoning,
     )

@@ -28,8 +28,9 @@ from server.services.session_state import Position, after_set, after_skip
 from server.services.units import Unit, to_kg
 from server.services.workouts import pick_plan_day, plan_day_targets, queue_insight
 
-# A repeated complete_set this soon after the last one is a retried request, not a new set.
-RETRY_WINDOW = timedelta(seconds=8)
+# A repeated complete_set this soon after the last one is a retried request, not a new set
+# (voice retries arrive within a second or two; a real next set takes longer).
+RETRY_WINDOW = timedelta(seconds=3)
 
 NO_ACTIVE_SESSION = "You don't have a workout in progress. Say start my workout to begin."
 ALL_EXERCISES_DONE = "You've finished every exercise. Say end workout to wrap up."
@@ -142,6 +143,17 @@ async def _with_last_time(
     index = view.position.sets_done
     last = previous[index] if index < len(previous) else None
     return replace(view, last_time=last)
+
+
+async def active_session_view(
+    db: AsyncSession, ctx: UserContext, resolver: ExerciseResolver, *, now: datetime
+) -> SessionView | None:
+    """Today's workout in progress (e.g. after an undo moved it back), or None."""
+    session = await repo.get_active_session_full(db, ctx.user_id)
+    if session is None:
+        return None
+    today = now.astimezone(ctx.tz).date()
+    return await _with_last_time(db, ctx, _view(session, ctx, resolver), today)
 
 
 # --- start_session ------------------------------------------------------------------------
