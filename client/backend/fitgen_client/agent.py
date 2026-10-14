@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from langchain.agents import create_agent
-from langchain.agents.middleware import AgentMiddleware, ModelRequest
+from langchain.agents.middleware import AgentMiddleware, ModelRequest, ModelRetryMiddleware
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import (
     AIMessage,
@@ -93,12 +93,32 @@ def _reply_tool() -> StructuredTool:
     )
 
 
+# Groq's errors when the model's output was malformed (about 3% of live turns with gpt-oss:
+# a made-up "commentary" tool, or unparseable output). Asking again almost always works.
+_MALFORMED_GENERATION = ("tool call validation failed", "parsing failed", "failed_generation")
+
+
+def is_invalid_tool_call(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(marker in message for marker in _MALFORMED_GENERATION)
+
+
 def build_agent(model: BaseChatModel, tools: list[BaseTool]):
     return create_agent(
         model,
         [*tools, _reply_tool()],
         system_prompt=SYSTEM_PROMPT,
-        middleware=[VoiceTurnMiddleware()],
+        middleware=[
+            VoiceTurnMiddleware(),
+            ModelRetryMiddleware(
+                max_retries=2,
+                retry_on=is_invalid_tool_call,
+                on_failure="error",
+                initial_delay=0.2,
+                backoff_factor=1.0,
+                jitter=False,
+            ),
+        ],
         checkpointer=_checkpointer,
     )
 

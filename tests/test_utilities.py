@@ -276,3 +276,15 @@ def test_macros_speech():
         "a day. That's roughly 150 grams of protein, 75 grams of fat and 400 grams of carbs. "
         "Treat it as a starting point."
     )
+
+
+def test_readiness_speech_when_an_earlier_check_still_applies():
+    pain = check(present_readiness(Assessment("light", (), pain_reported=True, kept_earlier=True)))
+    assert pain.startswith(f"Thanks for telling me. {PAIN_ADVICE}")
+    assert pain.endswith(
+        "For everything else today, I'll keep the lighter plan from your earlier check."
+    )
+    kept = check(present_readiness(Assessment("light", ("short sleep",), kept_earlier=True)))
+    assert (
+        kept == "Thanks for the update. I'll keep the lighter plan from your earlier check today."
+    )

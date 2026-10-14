@@ -27,7 +27,7 @@ export function SessionCardView({ node }: { node: SessionCardNode }) {
       </div>
       {node.last_time && (
         <div className="mt-4 text-sm text-muted">
-          Last time: <span className="font-semibold text-fg">{node.last_time}</span>. Beat it.
+          Last session: <span className="font-semibold text-fg">{node.last_time}</span>. Beat it.
         </div>
       )}
       {node.form_cue && (

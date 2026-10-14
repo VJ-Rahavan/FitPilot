@@ -228,6 +228,20 @@ Signature feature: live voice coaching between sets ("that felt easy" changes th
   - "Did you mean" suggestions need a closer match (no more "zumba → dumbbell bench press");
     the weekly fallback note no longer repeats the session count; chart axes use round
     ticks.
+- **Fixes from the second browser test (22 passed, 2 passed with problems):**
+  - The AI coach's note called back squat "stalled" right after a squat record (the data
+    marked other lifts as stalled). The prompt now lists "Improving lifts" and "Stalled
+    lifts" explicitly, and the validator rejects any stall claim about a lift not on the
+    stalled list.
+  - A later readiness check could make the day less cautious (a pain report after "slept
+    badly" replaced 20% off with 10%). The day keeps its most cautious level, and only the
+    first lightening touches an active workout, so cuts never stack.
+  - The end summary names exercises cut short. Errors read naturally ("bench press,
+    incline bench press or overhead press"; unknown names get a hint instead of a wrong
+    guess). Greetings no longer clear the screen; the transcript follows new messages; the
+    card says "Last session".
+  - About 3% of live turns hit a Groq error for malformed model output (FRICTION_LOG #3);
+    the agent now retries those model calls.
 
 ### Signature feature: live effort coaching and "beat last time"
 

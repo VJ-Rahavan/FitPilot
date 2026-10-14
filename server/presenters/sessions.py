@@ -297,6 +297,8 @@ def present_end(r: EndResult) -> Presentation:
         text += f" New records on {join_limited([spoken_exercise(n) for n, _ in r.prs])}!"
     if r.skipped:
         text += f" You skipped {join_limited([spoken_exercise(n) for n in r.skipped])}."
+    if r.cut_short:
+        text += f" You cut {join_limited([spoken_exercise(n) for n in r.cut_short])} short."
 
     minutes = max(1, round(r.duration.total_seconds() / 60))
     components: list[dict[str, Any]] = [

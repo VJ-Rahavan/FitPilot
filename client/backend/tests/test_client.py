@@ -243,3 +243,33 @@ def test_recent_turns_never_splits_a_tool_call():
     trimmed = recent_turns(history, keep=2)
     assert trimmed[0].content == "u3" and len(trimmed) == 6
     assert recent_turns(history[:3], keep=2) == history[:3]
+
+
+def test_invalid_tool_call_from_the_provider_is_retried(fitgen_url):
+    """gpt-oss on Groq sometimes emits a made-up 'commentary' tool, which Groq rejects."""
+    rejected = RuntimeError(
+        "Error code: 400 - Tool call validation failed: attempted to call tool 'commentary'"
+    )
+    model = ScriptedChatModel(replies=[rejected, tool_call("reply", {"text": "Hi there."})])
+    client = TestClient(create_app(settings(fitgen_url), model_factory=lambda s: model))
+    events = chat(client, "Hello!")
+    assert events[-1] == (
+        "done",
+        {"conversation_id": events[-1][1]["conversation_id"], "text": "Hi there."},
+    )
+
+
+def test_retry_matches_only_malformed_generations():
+    from fitgen_client.agent import is_invalid_tool_call
+
+    assert is_invalid_tool_call(RuntimeError("Tool call validation failed: tool 'commentary'"))
+    assert is_invalid_tool_call(
+        RuntimeError("Parsing failed. The model generated output that could not be parsed.")
+    )
+    assert not is_invalid_tool_call(RuntimeError("Error code: 401 - Invalid API Key"))
+
+
+def test_other_model_errors_are_not_retried(fitgen_url):
+    model = ScriptedChatModel(replies=[RuntimeError("boom"), tool_call("reply", {"text": "x"})])
+    client = TestClient(create_app(settings(fitgen_url), model_factory=lambda s: model))
+    assert chat(client, "Hello!")[0][0] == "error"

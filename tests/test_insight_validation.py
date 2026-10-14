@@ -90,6 +90,8 @@ def test_prompt_has_only_metrics_with_units():
         "Bench Press: top set 190 pounds for 6 reps, was 175 pounds 4 weeks ago.",
         "Barbell Row: top set 145 pounds for 8 reps, was 145 pounds 4 weeks ago, "
         "same top weight for 4 sessions.",
+        "Improving lifts: Bench Press.",
+        "Stalled lifts: Barbell Row.",
     ]
     lowered = prompt.lower()
     for private in ("demo", "user", "email", "@", "id"):
@@ -108,3 +110,33 @@ def test_numbers_from_metrics_count_as_specific():
     m = _metrics()
     assert {"190", "175", "145", "6", "8", "3", "4"} <= m.numbers
     assert validate_insight("Hold steady at 145 pounds on your top set.", [], m.numbers)
+
+
+LIFTS = ["Back Squat", "Romanian Deadlift", "Dumbbell Curl", "Bench Press"]
+STALLED = ["Romanian Deadlift", "Dumbbell Curl"]
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        # The real note from the browser test, right after a back squat record:
+        "Focus on back squat form this week to break the stall. Stay consistent with all "
+        "four sessions.",
+        "Your squat is stuck at 225 pounds. Keep showing up.",
+    ],
+)
+def test_rejects_stall_claims_about_lifts_that_are_not_stalled(text):
+    with pytest.raises(InsightRejected, match="called Back Squat stalled"):
+        validate_insight(text, LIFTS, set(), STALLED)
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Your Romanian deadlift has stalled at 175 pounds, so slow the lowering. "
+        "Keep your squat momentum going.",
+        "Your curls have plateaued, so focus on control. Back squat keeps climbing.",
+    ],
+)
+def test_accepts_correct_stall_claims(text):
+    assert validate_insight(text, LIFTS, set(), STALLED)

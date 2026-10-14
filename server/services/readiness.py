@@ -28,6 +28,7 @@ WEIGHT_FACTOR: dict[str, Decimal] = {
     "rest": Decimal("0.8"),  # if they train anyway, keep it light
 }
 SETS_DROPPED: dict[str, int] = {"full": 0, "reduce": 0, "light": 1, "rest": 1}
+SEVERITY: tuple[str, ...] = ("full", "reduce", "light", "rest")
 
 # Deliberately broad: a false positive only adds safety advice.
 PAIN = re.compile(
@@ -46,6 +47,7 @@ class Assessment:
     pain_reported: bool = False
     energy_high: bool = False
     session_adjusted: bool = False  # the remaining exercises of today's workout were lightened
+    kept_earlier: bool = False  # an earlier, more cautious check today still applies
 
 
 def assess(
@@ -141,10 +143,21 @@ async def readiness_check(
         pain_mentioned=pain_mentioned,
     )
     today = now.astimezone(ctx.tz).date()
-    await repo.upsert_readiness(db, ctx.user_id, today, result.level, result.pain_reported)
+    earlier = await repo.get_readiness(db, ctx.user_id, today)
+    earlier_level = earlier.level if earlier else "full"
+    # A later check never makes the day less cautious (e.g. a pain report after "slept badly").
+    level: Level = max(result.level, earlier_level, key=SEVERITY.index)
+    pain = result.pain_reported or bool(earlier and earlier.pain_reported)
+    await repo.upsert_readiness(db, ctx.user_id, today, level, pain)
     adjusted = False
-    if result.level != "full":
-        adjusted = await _lighten_active_session(db, ctx, result.level, today)
+    if level != "full" and earlier_level == "full":
+        # Only the first lightening of the day touches the workout, so cuts never stack.
+        adjusted = await _lighten_active_session(db, ctx, level, today)
     return Assessment(
-        result.level, result.reasons, result.pain_reported, result.energy_high, adjusted
+        level,
+        result.reasons,
+        result.pain_reported,
+        result.energy_high,
+        adjusted,
+        kept_earlier=SEVERITY.index(earlier_level) > SEVERITY.index(result.level),
     )

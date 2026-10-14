@@ -424,6 +424,7 @@ class EndResult:
     volume_kg: Decimal = Decimal("0")
     exercises_done: int = 0
     skipped: tuple[str, ...] = ()  # planned exercises with no sets (skipped or not reached)
+    cut_short: tuple[str, ...] = ()  # started but fewer sets than planned
     prs: tuple[tuple[str, Decimal], ...] = ()  # (exercise, new best weight)
 
 
@@ -460,5 +461,10 @@ async def end_session(
         volume_kg=sum((Decimal(s.reps) * s.weight_kg for s in sets), Decimal("0")),
         exercises_done=len(trained),
         skipped=tuple(i.exercise.name for i in view.items if i.exercise.id not in trained),
+        cut_short=tuple(
+            i.exercise.name
+            for i in view.items
+            if 0 < sum(1 for s in sets if s.exercise_id == i.exercise.id) < i.sets
+        ),
         prs=prs,
     )

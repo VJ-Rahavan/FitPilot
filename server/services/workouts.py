@@ -39,14 +39,18 @@ def resolve_exercise(resolver: ExerciseResolver, name: str) -> ExerciseEntry:
     if r.found:
         return resolver.get(r.exercise_id)
     if r.matched_by == "ambiguous" and r.suggestions:
-        options = " or ".join(s.lower() for s in r.suggestions[:3])
+        names = [s.lower() for s in r.suggestions[:3]]
+        options = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} or {names[-1]}"
         raise UserFacingError(f"Did you mean {options}?", r.suggestions)
     if r.suggestions:
         raise UserFacingError(
             f"I couldn't find an exercise called {name}. Did you mean {r.suggestions[0].lower()}?",
             r.suggestions,
         )
-    raise UserFacingError(f"I couldn't find an exercise called {name}.")
+    raise UserFacingError(
+        f"I couldn't find an exercise called {name}. "
+        "Try a name like squat, bench press or deadlift."
+    )
 
 
 def week_start_of(moment: datetime, ctx: UserContext) -> date:

@@ -192,6 +192,23 @@ def test_end_caps_long_lists():
     assert "You skipped bench press, barbell row and 3 more." in text
 
 
+def test_end_mentions_exercises_cut_short():
+    r = EndResult(
+        "lb",
+        "Lower A",
+        False,
+        timedelta(minutes=30),
+        4,
+        lb(5400),
+        2,
+        skipped=("Leg Press",),
+        cut_short=("Back Squat", "Romanian Deadlift"),
+    )
+    assert check(present_end(r), "full").endswith(
+        "You skipped leg press. You cut back squat and romanian deadlift short."
+    )
+
+
 def test_end_long_and_cancelled():
     r = EndResult("lb", "Lower B", False, timedelta(hours=1, minutes=5), 18, lb(20_000), 5)
     assert "in 1 hour 5 minutes" in check(present_end(r), "full")

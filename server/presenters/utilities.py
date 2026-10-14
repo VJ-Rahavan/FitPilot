@@ -139,7 +139,14 @@ def present_form_cues(entry: ExerciseEntry) -> Presentation:
 def present_readiness(a: Assessment) -> Presentation:
     if a.pain_reported:
         # Safety first; the lighter day follows.
-        text = f"Thanks for telling me. {PAIN_ADVICE} {_PAIN_CHANGE[a.level]}"
+        change = (
+            "For everything else today, I'll keep the lighter plan from your earlier check."
+            if a.kept_earlier
+            else _PAIN_CHANGE[a.level]
+        )
+        text = f"Thanks for telling me. {PAIN_ADVICE} {change}"
+    elif a.kept_earlier:
+        text = "Thanks for the update. I'll keep the lighter plan from your earlier check today."
     elif a.level == "full":
         text = "You sound ready. Train as planned today."
         if a.reasons and a.energy_high:

@@ -32,3 +32,20 @@ Genuine problems hit with tools, SDKs or docs while building FitGen. Factual onl
 - **Workaround:** The demo client backend has its own uv project (`client/backend`), which
   uses langchain-groq with Groq SDK 0.37.1; the server keeps Groq SDK 1.7.
 - **Suggestion:** Allow `groq>=1` in langchain-groq.
+
+## 3. gpt-oss on Groq occasionally produces output Groq rejects
+
+- **Task:** Drive FitGen's tools with a LangChain agent on Groq `openai/gpt-oss-120b`, with
+  `tool_choice` required (demo client, Phase 8).
+- **Steps:** Run multi-turn conversations (about 70 live turns over several runs).
+- **Expected:** Every response is a valid tool call.
+- **Actual:** About 3% of turns failed with `groq.APIError`, in two forms:
+  `Tool call validation failed: attempted to call tool 'commentary'` (a tool that doesn't
+  exist, apparently from the model's internal "commentary" channel) and `Parsing failed. The
+  model generated output that could not be parsed. ... See 'failed_generation'`. The SDK's
+  own retries don't cover these (they're 400s).
+- **Severity:** Medium: the user hears an error unless the app retries.
+- **Workaround:** LangChain `ModelRetryMiddleware` with a `retry_on` that matches only
+  these malformed-generation errors (`client/backend/fitgen_client/agent.py`).
+- **Suggestion:** Groq could retry or repair malformed generations server-side, or return a
+  distinct error type for them so clients can retry without matching message text.

@@ -99,4 +99,7 @@ def test_voice_errors_for_unresolved_names(resolver):
     assert " or " in ambiguous.value.message
     with pytest.raises(UserFacingError) as unknown:
         resolve_exercise(resolver, "zumba")
-    assert unknown.value.message.startswith("I couldn't find an exercise called zumba.")
+    assert unknown.value.message == (
+        "I couldn't find an exercise called zumba. Try a name like squat, bench press or deadlift."
+    )
+    assert ", " in ambiguous.value.message or ambiguous.value.message.count(" or ") == 1

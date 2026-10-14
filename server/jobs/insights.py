@@ -25,6 +25,7 @@ from server.services.workouts import get_weekly_summary
 
 MAX_CHARS = 240
 TREND_WEEKS = 4
+STALL_SESSIONS = 3  # same top weight this many sessions in a row
 
 SYSTEM_PROMPT = (
     "You are FitGen, a concise strength coach. Your words are spoken aloud by a voice "
@@ -34,7 +35,8 @@ SYSTEM_PROMPT = (
     "why. Base it on the data: a stalled lift, missed sessions, a drop in volume, or what "
     "is working. Name at least one exercise from the data. Don't prescribe new weights or "
     "rep targets, because the plan sets those. Always put the unit in full words after any "
-    "weight, for example '145 pounds'. Use short everyday words. Plain text only: no "
+    "weight, for example '145 pounds'. Only call a lift stalled or stuck if it is in the "
+    "Stalled lifts line. Use short everyday words. Plain text only: no "
     "greeting, no lists, no markdown, no emoji, no symbols. Say 'percent' and 'personal "
     "record', not % or PR. Never mention pain, injury, soreness, medication, diet or "
     f"supplements. Stay under {MAX_CHARS} characters."
@@ -73,6 +75,20 @@ class WeeklyMetrics:
     @property
     def exercise_names(self) -> list[str]:
         return [lift.name for lift in self.lifts] + [name for name, _ in self.records]
+
+    @property
+    def stalled(self) -> list[str]:
+        return [lift.name for lift in self.lifts if lift.stalled_sessions >= STALL_SESSIONS]
+
+    @property
+    def improving(self) -> list[str]:
+        return [
+            lift.name
+            for lift in self.lifts
+            if lift.start_top is not None
+            and lift.this_week_top > lift.start_top
+            and lift.stalled_sessions < STALL_SESSIONS
+        ]
 
     @property
     def numbers(self) -> set[str]:
@@ -175,9 +191,12 @@ def render_prompt(m: WeeklyMetrics) -> str:
         text = f"{lift.name}: top set {_num(lift.this_week_top)} {word} for {lift.reps_at_top} reps"
         if lift.start_top is not None:
             text += f", was {_num(lift.start_top)} {word} {TREND_WEEKS} weeks ago"
-        if lift.stalled_sessions >= 3:
+        if lift.stalled_sessions >= STALL_SESSIONS:
             text += f", same top weight for {lift.stalled_sessions} sessions"
         lines.append(text + ".")
+    # Explicit lists, so the model can't confuse which lift is which.
+    lines.append(f"Improving lifts: {', '.join(m.improving) or 'none'}.")
+    lines.append(f"Stalled lifts: {', '.join(m.stalled) or 'none'}.")
     return "\n".join(lines)
 
 
@@ -229,8 +248,33 @@ def _spell_unit(match: re.Match) -> str:
     return f"{number} {word}" + ("." if keep_period else "")
 
 
+_STALL_WORDS = re.compile(r"\b(stall\w*|plateau\w*|stuck)\b", re.IGNORECASE)
+
+
+def _misnamed_stall(sentence: str, known_terms: list[str], stalled: list[str]) -> str | None:
+    """A lift this sentence calls stalled although the data doesn't, if any."""
+    if not _STALL_WORDS.search(sentence):
+        return None
+    said = f" {normalize(sentence)} "
+    stalled_words = {w for name in stalled for w in normalize(name).split()}
+    for name in known_terms:
+        if name in stalled:
+            continue
+        words = normalize(name).split()
+        # The full name ("back squat"), or its last word ("squat") when that word isn't also
+        # part of a stalled lift's name.
+        if f" {' '.join(words)} " in said or (
+            words[-1] not in stalled_words and f" {words[-1]} " in said
+        ):
+            return name
+    return None
+
+
 def validate_insight(
-    text: str, known_terms: list[str], known_numbers: set[str] | frozenset = frozenset()
+    text: str,
+    known_terms: list[str],
+    known_numbers: set[str] | frozenset = frozenset(),
+    stalled: list[str] | None = None,
 ) -> str:
     """Normalize the model's text for speech, or raise InsightRejected with the reason."""
     if _MARKDOWN.search(text):  # checked on the raw text, before whitespace is flattened
@@ -261,6 +305,13 @@ def validate_insight(
         raise InsightRejected(f"it was {len(cleaned)} characters, over the {MAX_CHARS} limit")
     if unsafe := _UNSAFE.search(cleaned):
         raise InsightRejected(f"it mentioned {unsafe.group(0)!r}; avoid pain, injury and diet")
+    if stalled is not None:
+        for sentence in sentences:
+            if wrong := _misnamed_stall(sentence, known_terms, stalled):
+                raise InsightRejected(
+                    f"it called {wrong} stalled, but the data shows it isn't; stalled lifts "
+                    f"are: {', '.join(stalled) or 'none'}"
+                )
     normalized = normalize(cleaned)
     names_an_exercise = any(normalize(t) in normalized for t in known_terms)
     numbers = {n.replace(",", "") for n in re.findall(r"\d[\d,]*(?:\.\d+)?", cleaned)}
@@ -289,7 +340,9 @@ async def regenerate_weekly_insight(
     for attempt in range(2):
         text = await llm.complete(system=SYSTEM_PROMPT, user=prompt + feedback)
         try:
-            insight = validate_insight(text, metrics.exercise_names, metrics.numbers)
+            insight = validate_insight(
+                text, metrics.exercise_names, metrics.numbers, stalled=metrics.stalled
+            )
             break
         except InsightRejected as exc:
             if attempt == 1:

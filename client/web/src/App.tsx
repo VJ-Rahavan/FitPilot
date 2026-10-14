@@ -1,5 +1,5 @@
 import { Mic, MicOff, Send, Volume2, VolumeX } from 'lucide-react'
-import { type FormEvent, useCallback, useRef, useState } from 'react'
+import { type FormEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { ActionProvider } from './components/genui/ActionContext'
 import { UIRenderer } from './components/genui/UIRenderer'
 import { type ChatEvent, runAction, streamChat, type ToolResult } from './lib/api'
@@ -23,6 +23,8 @@ const SUGGESTIONS = [
 ]
 
 const toolLabel = (name: string) => name.replace(/_/g, ' ')
+// "reply" is the agent talking without a FitGen tool: not worth labelling.
+const shownTools = (tools: string[]) => tools.filter((t) => t !== 'reply')
 
 export default function App() {
   const [turns, setTurns] = useState<Turn[]>([])
@@ -32,10 +34,16 @@ export default function App() {
   const [muted, setMuted] = useState(false)
   const [draft, setDraft] = useState('')
   const conversationId = useRef<string | null>(null)
+  const transcriptEnd = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    transcriptEnd.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [turns, busy])
 
   const say = useCallback((text: string) => !muted && speak(text), [muted])
 
   const show = useCallback((result: ToolResult) => {
+    if (result.components.length === 0) return // e.g. a greeting: keep what's on screen
     if (result.display === 'full') {
       setFull(result)
       setFragments([])
@@ -151,13 +159,16 @@ export default function App() {
                   )}
                 >
                   {turn.text}
-                  {turn.tools && turn.tools.length > 0 && (
-                    <div className="mt-1 text-xs text-muted">{turn.tools.map(toolLabel).join(' · ')}</div>
+                  {turn.tools && shownTools(turn.tools).length > 0 && (
+                    <div className="mt-1 text-xs text-muted">
+                      {shownTools(turn.tools).map(toolLabel).join(' · ')}
+                    </div>
                   )}
                 </div>
               </div>
             ))}
             {busy && <div className="text-sm text-muted animate-pulse">FitGen is thinking…</div>}
+            <div ref={transcriptEnd} />
           </div>
 
           <form onSubmit={onSubmit} className="flex items-center gap-2 border-t border-border p-3">

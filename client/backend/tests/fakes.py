@@ -14,7 +14,7 @@ def tool_call(name: str, args: dict, call_id: str = "call-1") -> AIMessage:
 
 
 class ScriptedChatModel(BaseChatModel):
-    replies: list[AIMessage]
+    replies: list[Any]  # AIMessages, or exceptions to raise for that call
     seen: list[list[BaseMessage]] = []
     bind_kwargs: list[dict] = []
 
@@ -28,7 +28,10 @@ class ScriptedChatModel(BaseChatModel):
 
     def _next(self, messages: list[BaseMessage]) -> AIMessage:
         self.seen.append(list(messages))
-        return self.replies.pop(0)
+        reply = self.replies.pop(0)
+        if isinstance(reply, Exception):
+            raise reply
+        return reply
 
     def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
         return ChatResult(generations=[ChatGeneration(message=self._next(messages))])

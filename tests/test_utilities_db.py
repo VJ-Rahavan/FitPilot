@@ -228,3 +228,17 @@ async def test_set_preferences_bad_unit(tools_url):
     result = await call(tools_url, "set_preferences", {"unit": "stone"})
     assert result.is_error
     assert text_of(result) == "I can use pounds or kilograms. Which would you like?"
+
+
+async def test_later_readiness_check_never_makes_the_day_less_cautious(tools_url):
+    await _db_execute(delete(ReadinessCheck))
+    light = await call(tools_url, "readiness_check", {"sleep_hours": 4.5})
+    assert "20 percent" in text_of(light)
+    pain = await call(tools_url, "readiness_check", {"notes": "my knee hurts"})
+    assert text_of(pain).endswith(
+        "For everything else today, I'll keep the lighter plan from your earlier check."
+    )
+    today = await call(tools_url, "get_todays_workout")
+    if "rest day" not in text_of(today):
+        assert "taken 20 percent off today's weights and dropped a set" in text_of(today)
+    await _db_execute(delete(ReadinessCheck))
